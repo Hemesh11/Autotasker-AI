@@ -1,0 +1,87 @@
+{
+  "daily_automation": {
+    "email_communication": [
+      "Every day at 9AM, send me a summary of yesterday's unread emails",
+      "Send me important emails from the last 24 hours every morning",
+      "Summarize my Gmail inbox and email me the digest"
+    ],
+    "coding_learning": [
+      "Generate 2 medium difficulty coding questions every day at 8AM",
+      "Send me 3 LeetCode problems: 1 easy, 1 medium, 1 hard every Monday",
+      "Create daily coding practice with array and string problems"
+    ],
+    "development_workflow": [
+      "Summarize my GitHub commits from yesterday and email the report",
+      "Check for new issues in my repositories and notify me",
+      "Send me a weekly summary of my coding activity"
+    ],
+    "combined_workflows": [
+      "Every day at 9AM, send me 2 LeetCode questions and summarize yesterday's emails",
+      "Generate coding questions, summarize GitHub activity, and send everything in one email",
+      "Create a daily digest with emails, GitHub updates, and coding challenges"
+    ]
+  },
+  "one_time_tasks": {
+    "email_operations": [
+      "Get all unread emails from today and summarize them",
+      "Find emails from the last week containing 'meeting' and summarize",
+      "Check my inbox for urgent emails and send me a summary"
+    ],
+    "coding_questions": [
+      "Generate 5 algorithm questions about trees and graphs",
+      "Create 3 easy array problems for interview practice",
+      "Generate hard dynamic programming questions"
+    ],
+    "github_analysis": [
+      "Get my commits from the last week and create a summary",
+      "Analyze my recent coding activity and send a report",
+      "Check my repositories for new issues or pull requests"
+    ]
+  },
+  "advanced_prompts": {
+    "conditional_logic": [
+      "If I have more than 10 unread emails, summarize them and send me a digest",
+      "Generate coding questions only on weekdays",
+      "Send GitHub summary only if there were commits in the last 24 hours"
+    ],
+    "multi_step_workflows": [
+      "First, get my emails from today. Then, generate 2 coding questions. Finally, send both in one email",
+      "Fetch GitHub commits, summarize them, generate related coding questions, and email everything",
+      "Check emails for any coding interview requests, then generate appropriate practice questions"
+    ],
+    "customization": [
+      "Generate Python-specific coding questions about data structures",
+      "Focus on emails from recruiters and generate system design questions",
+      "Get commits related to frontend development and create relevant challenges"
+    ]
+  },
+  "scheduling_examples": {
+    "daily": [
+      "every day at 8:00 AM",
+      "daily at 9:30",
+      "each morning at 7:00"
+    ],
+    "weekly": [
+      "every Monday at 9 AM",
+      "weekly on Friday at 5 PM",
+      "each Sunday at 8:00"
+    ],
+    "custom": [
+      "every 2 hours during work days",
+      "twice a week on Tuesday and Thursday",
+      "monthly on the 1st at 9 AM"
+    ]
+  },
+  "error_handling": {
+    "fallback_instructions": [
+      "If Gmail is unavailable, save the report to a file",
+      "If coding generation fails, send me a notification",
+      "Retry up to 3 times if any step fails"
+    ],
+    "alternative_actions": [
+      "If no new emails, generate extra coding questions instead",
+      "If GitHub API is down, focus only on email summary",
+      "Send notification if any service is unavailable"
+    ]
+  }
+}

@@ -1,0 +1,111 @@
+# Application Configuration
+app:
+  name: "AutoTasker AI"
+  version: "1.0.0"
+  debug: true
+  max_retries: 3
+  timeout_seconds: 30
+
+# LLM Configuration
+llm:
+  # API Provider: "openai" or "openrouter"
+  provider: "openrouter"  # Change to "openai" if using OpenAI directly
+  
+  # Default model (OpenRouter format: "provider/model-name")
+  model: "meta-llama/llama-3.3-70b-instruct"  # Best free model for this project
+  temperature: 0.7
+  max_tokens: 2000
+  
+  # OpenRouter specific settings
+  openrouter:
+    # Popular FREE models available on OpenRouter:
+    # Best overall: "meta-llama/llama-3.3-70b-instruct"
+    # Code generation: "qwen/qwen-2.5-coder-32b-instruct"
+    # Fast response: "google/gemini-2.0-flash-experimental"
+    # Reasoning: "deepseek/deepseek-r1"
+    # Vision tasks: "qwen/qwen-2.5-vl-72b-instruct"
+    default_model: "meta-llama/llama-3.3-70b-instruct"
+    app_name: "AutoTasker-AI"
+    
+# Add to the existing config.yaml:
+
+# GitHub Integration (add this section)
+github:
+  token: ""  # Will be overridden by GITHUB_TOKEN env var
+  default_owner: "your-username"  # Default GitHub username/org
+  default_repo: "your-repo"       # Default repository name
+  max_commits: 50                 # Max commits to fetch
+  max_issues: 20                  # Max issues to fetch
+  include_private: false          # Whether to include private repos
+
+# Update the agents section to include GitHub agent:
+agents:
+  planner:
+    model: "openai/gpt-4-turbo-preview"
+    temperature: 0.3
+  summarizer:
+    model: "openai/gpt-3.5-turbo"
+    temperature: 0.5
+  dsa_generator:
+    model: "openai/gpt-4-turbo-preview"
+    temperature: 0.8
+  # ADD THESE:
+  github:
+    model: "openai/gpt-3.5-turbo"
+    temperature: 0.4
+    max_analysis_commits: 50
+  gmail:
+    model: "openai/gpt-3.5-turbo" 
+    temperature: 0.3
+    max_emails_per_request: 20
+  email:
+    default_provider: "ses"  # or "gmail"
+    subject_prefix: "[AutoTasker AI]"
+  logger:
+    backends: ["file", "s3"]  # file, s3, cloudwatch
+    retention_days: 30
+  memory:
+    backend: "json"  # json, redis, vector
+    max_entries: 1000
+    retention_days: 30
+# Scheduling
+scheduler:
+  default_time: "09:00"
+  timezone: "UTC"
+  max_daily_tasks: 10
+  
+# Memory Settings
+memory:
+  retention_days: 30
+  use_vector_store: false
+  similarity_threshold: 0.8
+  
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file_path: "data/logs/autotasker.log"
+  
+# Cloud Services
+aws:
+  region: "us-east-1"
+  s3_bucket: "autotasker-logs"
+  lambda_timeout: 300
+  
+google:
+  scopes:
+    - "https://www.googleapis.com/auth/gmail.readonly"
+    - "https://www.googleapis.com/auth/gmail.send"
+    - "https://www.googleapis.com/auth/spreadsheets"
+    - "https://www.googleapis.com/auth/drive.file"
+
+# GitHub Integration
+github:
+  # Get personal access token from: https://github.com/settings/tokens
+  # Required scopes: repo, user
+  token_env_var: "GITHUB_TOKEN"
+  default_operations:
+    - "get_commits"
+    - "get_issues" 
+    - "get_repo_info"
+  rate_limit_requests_per_hour: 5000  # GitHub API limit

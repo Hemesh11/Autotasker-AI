@@ -1,0 +1,201 @@
+# AutoTasker AI - .gitignore
+
+# Environment Variables and Configuration
+.env
+.env.local
+.env.development
+.env.production
+config/.env
+config/credentials.json
+config/token.json
+
+# API Keys and Tokens
+**/credentials.json
+**/token.json
+**/client_secret*.json
+**/*_credentials.json
+**/*_token.json
+**/*.pem
+**/*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE Files
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+.vscode/.ropeproject
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# Logs
+logs/
+*.log
+data/logs/
+memory/logs/
+**/*.log
+
+# Memory and Cache Files
+memory/*.json
+!memory/.gitkeep
+cache/
+.cache/
+*.cache
+
+# Test Coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# AWS
+.aws/
+**/aws-credentials
+**/aws-config
+cloudformation-outputs.json
+
+# Google Cloud
+**/service-account*.json
+**/gcp-credentials*.json
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Backup Files
+*.bak
+*.backup
+*.old
+
+# Large Data Files
+*.csv
+*.xlsx
+*.json
+!data/sample_prompts.json
+!config/config.yaml
+!package.json
+
+# Model Files
+*.pkl
+*.pickle
+*.model
+
+# Secrets and Sensitive Data
+secrets/
+private/
+confidential/
+
+# Local Development
+local_test.py
+scratch.py
+debug.py
+playground.py
+
+# Documentation Build
+docs/_build/
+docs/build/
+
+# Windows
+*.lnk
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# Vim
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Archive Files
+*.zip
+*.tar.gz
+*.rar
+*.7z
