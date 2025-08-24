@@ -32,7 +32,7 @@ class GmailAgent:
         self.logger = logging.getLogger(f"{__name__}.GmailAgent")
         
         self.credentials_path = config.get("google", {}).get("credentials_path", "google_auth/credentials.json")
-        self.token_path = config.get("google", {}).get("token_path", "google_auth/token.json")
+        self.token_path = config.get("google", {}).get("gmail_token_path", "google_auth/gmail_token.json")
         
         self.service = None
         self._authenticate()
@@ -84,14 +84,18 @@ class GmailAgent:
             Task execution results
         """
         
-        task_type = task.get("description", "").lower()
         parameters = task.get("parameters", {})
+        operation = parameters.get("operation", "").lower()
+        task_type = task.get("description", "").lower()
         
         try:
-            if "fetch" in task_type or "get" in task_type:
-                return self.fetch_emails(parameters)
-            elif "send" in task_type:
+            # Check operation parameter first, then fall back to description
+            if operation == "send_email" or "send" in task_type:
                 return self.send_email(parameters)
+            elif operation == "search_emails":
+                return {"success": True, "content": "Search emails", "data": {"emails": self.search_emails(parameters.get("query", ""), parameters.get("limit", 10))}}
+            elif operation == "get_emails" or "fetch" in task_type or "get" in task_type:
+                return self.fetch_emails(parameters)
             else:
                 # Default to fetching emails
                 return self.fetch_emails(parameters)

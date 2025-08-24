@@ -11,6 +11,20 @@ from typing import Dict, List, Any, Optional
 import json
 from dateutil.parser import parse as parse_date
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv("config/.env")
+except ImportError:
+    # Try loading without dotenv
+    env_path = "config/.env"
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                if '=' in line and not line.startswith('#'):
+                    key, value = line.strip().split('=', 1)
+                    os.environ[key] = value.strip('"')
+
 # Add project root to Python path for direct execution
 if __name__ == "__main__":
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,11 +47,31 @@ except ImportError:
     def get_openai_client(config):
         try:
             from openai import OpenAI
-            api_key = os.getenv('OPENAI_API_KEY') or config.get('llm', {}).get('api_key')
-            if not api_key:
-                raise ValueError("OpenAI API key not found")
-            return OpenAI(api_key=api_key)
+            
+            # Get LLM configuration
+            llm_config = config.get('llm', {})
+            provider = llm_config.get('provider', 'openai')
+            
+            if provider == 'openrouter':
+                # Use OpenRouter API
+                api_key = os.getenv('OPENROUTER_API_KEY')
+                if not api_key:
+                    raise ValueError("OpenRouter API key not found. Set OPENROUTER_API_KEY environment variable.")
+                return OpenAI(
+                    api_key=api_key,
+                    base_url="https://openrouter.ai/api/v1"
+                )
+            else:
+                # Use OpenAI API
+                api_key = os.getenv('OPENAI_API_KEY') or llm_config.get('api_key')
+                if not api_key:
+                    raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
+                return OpenAI(api_key=api_key)
+                
         except ImportError:
+            return None
+        except Exception as e:
+            print(f"Warning: Failed to initialize LLM client: {e}")
             return None
 
 
@@ -211,27 +245,44 @@ class CalendarAgent:
     def _parse_event_description(self, description: str) -> Dict[str, Any]:
         """Parse natural language description to extract event details"""
         try:
+            # Get current date for context
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            current_day = datetime.now().strftime("%A, %B %d, %Y")
+            
             # Use OpenAI to parse the natural language description
             prompt = f"""
+            Today is {current_day} ({current_date}).
+            
             Parse this calendar event request and extract the details in JSON format:
             "{description}"
             
             Extract and return a JSON object with these fields:
             - summary: Event title/name
             - description: Additional event details
-            - start_time: ISO format datetime (e.g., "2025-08-13T09:00:00")
+            - start_time: ISO format datetime (e.g., "2025-08-25T14:00:00")
             - end_time: ISO format datetime (default to 1 hour after start)
             - timezone: timezone (default to "UTC")
             - reminders: array of reminder objects like [{{"method": "popup", "minutes": 15}}]
             
-            For dates, assume current year 2025 if not specified. For times, use 24-hour format.
-            If reminder is mentioned, add appropriate reminders.
+            IMPORTANT: Today is {current_date}. Calculate dates relative to this.
+            - "tomorrow" = {(datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")}
+            - Use 24-hour format for times
+            - If reminder is mentioned, add appropriate reminders
             
             Return only the JSON object, no other text.
             """
             
+            # Get the appropriate model
+            llm_config = self.config.get('llm', {})
+            model = llm_config.get('model', 'gpt-4')
+            
+            # If no OpenAI client available, skip AI parsing
+            if not self.openai_client:
+                self.logger.warning("No LLM client available, using fallback parsing")
+                raise Exception("LLM client not available")
+            
             response = self.openai_client.chat.completions.create(
-                model=self.config.get('llm', {}).get('model', 'gpt-4'),
+                model=model,
                 messages=[
                     {"role": "system", "content": "You are a calendar event parser. Return only valid JSON."},
                     {"role": "user", "content": prompt}
@@ -240,6 +291,13 @@ class CalendarAgent:
             )
             
             event_json = response.choices[0].message.content.strip()
+            
+            # Clean markdown code blocks if present
+            if event_json.startswith('```json'):
+                event_json = event_json.replace('```json', '').replace('```', '').strip()
+            elif event_json.startswith('```'):
+                event_json = event_json.replace('```', '').strip()
+            
             event_details = json.loads(event_json)
             
             # Validate and set defaults

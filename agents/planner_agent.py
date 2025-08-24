@@ -308,12 +308,26 @@ Create the most efficient plan possible."""
         
         tasks = []
         
-        if any(word in prompt_lower for word in ["email", "gmail", "inbox"]):
+        # Check for send email requests
+        if any(word in prompt_lower for word in ["send", "email to", "compose", "write email"]):
+            tasks.append({
+                "id": "gmail_send",
+                "type": "gmail",
+                "description": "Send email",
+                "parameters": {
+                    "operation": "send_email",
+                    "subject": "AutoTasker AI - Fallback Email",
+                    "body": f"This email was generated from your request: '{prompt}'\n\nAutoTasker AI is working with a fallback plan due to API limitations."
+                },
+                "dependencies": [],
+                "priority": 1
+            })
+        elif any(word in prompt_lower for word in ["email", "gmail", "inbox"]):
             tasks.append({
                 "id": "gmail_fetch",
                 "type": "gmail",
                 "description": "Fetch recent emails",
-                "parameters": {"max_results": 10, "time_range": "1d"},
+                "parameters": {"operation": "get_emails", "max_results": 10, "time_range": "1d"},
                 "dependencies": [],
                 "priority": 1
             })
