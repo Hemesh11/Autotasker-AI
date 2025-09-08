@@ -17,35 +17,35 @@ class ToolSelector:
         # Define task type mappings
         self.task_mappings = {
             # Email related
-            "gmail": ["gmail_agent"],
-            "email": ["email_agent"],
-            "mail": ["gmail_agent"],
-            "inbox": ["gmail_agent"],
+            "gmail": ["gmail_agent", "logger_agent"],
+            "email": ["email_agent", "logger_agent"],
+            "mail": ["gmail_agent", "logger_agent"],
+            "inbox": ["gmail_agent", "logger_agent"],
             
             # Code generation
-            "dsa": ["dsa_agent"],
-            "leetcode": ["dsa_agent"],
-            "coding": ["dsa_agent"],
-            "algorithm": ["dsa_agent"],
-            "programming": ["dsa_agent"],
-            "questions": ["dsa_agent"],
+            "dsa": ["dsa_agent", "logger_agent"],
+            "leetcode": ["dsa_agent", "logger_agent"],
+            "coding": ["dsa_agent", "logger_agent"],
+            "algorithm": ["dsa_agent", "logger_agent"],
+            "programming": ["dsa_agent", "logger_agent"],
+            "questions": ["dsa_agent", "logger_agent"],
             
             # GitHub related
-            "github": ["github_agent"],
-            "git": ["github_agent"],
-            "commit": ["github_agent"],
-            "repository": ["github_agent"],
-            "repo": ["github_agent"],
+            "github": ["github_agent", "logger_agent"],
+            "git": ["github_agent", "logger_agent"],
+            "commit": ["github_agent", "logger_agent"],
+            "repository": ["github_agent", "logger_agent"],
+            "repo": ["github_agent", "logger_agent"],
             
             # Content processing
-            "summarize": ["summarizer_agent"],
-            "summary": ["summarizer_agent"],
-            "analyze": ["summarizer_agent"],
+            "summarize": ["summarizer_agent", "logger_agent"],
+            "summary": ["summarizer_agent", "logger_agent"],
+            "analyze": ["summarizer_agent", "logger_agent"],
             
             # Utility
             "log": ["logger_agent"],
-            "memory": ["memory_agent"],
-            "retry": ["retry_agent"]
+            "memory": ["memory_agent", "logger_agent"],
+            "retry": ["retry_agent", "logger_agent"]
         }
         
         # Agent capabilities

@@ -140,11 +140,11 @@ def test_time_parsing():
             print(f"LLM Response: {result}")
             
             try:
-                import json
-                parsed = json.loads(result)
+                from backend.utils import parse_llm_json
+                parsed = parse_llm_json(result)
                 print(f"✓ Parsed successfully: {parsed.get('summary')} at {parsed.get('start_time')}")
-            except:
-                print("✗ Failed to parse JSON")
+            except Exception as parse_error:
+                print(f"✗ Failed to parse JSON: {parse_error}")
                 
     except Exception as e:
         print(f"Time parsing test failed: {e}")

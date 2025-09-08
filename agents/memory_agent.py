@@ -24,6 +24,9 @@ class MemoryAgent:
         self.similarity_threshold = config.get("memory", {}).get("similarity_threshold", 0.8)
         self.use_vector_store = config.get("memory", {}).get("use_vector_store", False)
         
+        # Store full config for per-agent settings
+        self.config = config
+        
         # Storage paths
         self.memory_dir = "memory"
         self.execution_history_file = os.path.join(self.memory_dir, "execution_history.json")
@@ -66,18 +69,31 @@ class MemoryAgent:
             self.recent_executions = []
             self.prompt_signatures = {}
     
-    def check_recent_execution(self, prompt: str) -> Dict[str, Any]:
+    def check_recent_execution(self, prompt: str, agent_name: str = None) -> Dict[str, Any]:
         """
         Check if a similar task was executed recently
         
         Args:
             prompt: The prompt to check
+            agent_name: Name of the agent making the request
             
         Returns:
             Memory check results
         """
         
         try:
+            # Check if similarity detection is enabled for this agent
+            if not self.should_check_similarity(agent_name):
+                return {
+                    "should_skip": False,
+                    "reason": f"Similarity detection disabled for agent: {agent_name}",
+                    "similarity": 0.0,
+                    "match_type": "disabled"
+                }
+            
+            # Get agent-specific threshold
+            threshold = self.get_similarity_threshold(agent_name)
+            
             # Generate prompt signature
             prompt_signature = self._generate_prompt_signature(prompt)
             
@@ -97,7 +113,7 @@ class MemoryAgent:
             if similar_match:
                 similarity = similar_match["similarity"]
                 
-                if similarity >= self.similarity_threshold:
+                if similarity >= threshold:
                     return {
                         "should_skip": True,
                         "reason": f"Similar prompt (similarity: {similarity:.2f}) executed recently",
@@ -108,7 +124,7 @@ class MemoryAgent:
                 else:
                     return {
                         "should_skip": False,
-                        "reason": f"Similar prompt found but below threshold (similarity: {similarity:.2f})",
+                        "reason": f"Similar prompt found but below threshold (similarity: {similarity:.2f}, threshold: {threshold})",
                         "similar_execution": similar_match["execution"],
                         "similarity": similarity,
                         "match_type": "below_threshold"
@@ -445,3 +461,35 @@ class MemoryAgent:
             "cleaned_signatures": old_signatures,
             "timestamp": datetime.now().isoformat()
         }
+    
+    def get_agent_memory_settings(self, agent_name: str) -> Dict[str, Any]:
+        """Get memory settings for a specific agent"""
+        agent_config = self.config.get("agents", {}).get(agent_name, {})
+        agent_memory = agent_config.get("memory", {})
+        
+        # Default memory settings
+        default_settings = {
+            "enable_similarity": self.config.get("memory", {}).get("enable_similarity", True),
+            "similarity_threshold": self.similarity_threshold,
+            "retention_days": self.retention_days
+        }
+        
+        # Override with agent-specific settings
+        settings = default_settings.copy()
+        settings.update(agent_memory)
+        
+        return settings
+
+    def should_check_similarity(self, agent_name: str = None) -> bool:
+        """Check if similarity detection should be enabled for this agent"""
+        if agent_name:
+            settings = self.get_agent_memory_settings(agent_name)
+            return settings.get("enable_similarity", True)
+        return True
+
+    def get_similarity_threshold(self, agent_name: str = None) -> float:
+        """Get similarity threshold for this agent"""
+        if agent_name:
+            settings = self.get_agent_memory_settings(agent_name)
+            return settings.get("similarity_threshold", self.similarity_threshold)
+        return self.similarity_threshold

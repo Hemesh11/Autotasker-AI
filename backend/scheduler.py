@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
 
 from backend.langgraph_runner import AutoTaskerRunner
@@ -37,6 +36,9 @@ class TaskScheduler:
         self.config = config
         self.use_cloud = use_cloud and EVENTBRIDGE_AVAILABLE
         
+        # Track limited interval jobs
+        self._limited_job_data = {}
+        
         if self.use_cloud:
             self._init_cloud_scheduler()
         else:
@@ -48,9 +50,10 @@ class TaskScheduler:
         """Initialize local APScheduler"""
         self.runner = AutoTaskerRunner(config=self.config)
         
-        # Configure job store (SQLite for persistence)
+        # Configure job store (Memory store to avoid pickle issues)
+        from apscheduler.jobstores.memory import MemoryJobStore
         jobstores = {
-            'default': SQLAlchemyJobStore(url='sqlite:///data/scheduler.db')
+            'default': MemoryJobStore()
         }
         
         executors = {
@@ -136,12 +139,27 @@ class TaskScheduler:
     ) -> str:
         """Schedule task using local APScheduler"""
         try:
-            job_id = create_task_id()
+            job_id = create_task_id(prompt)
             task_metadata = {
                 'job_id': job_id,
                 'task_name': task_name or f"Task {job_id}",
+                'schedule_type': schedule_type,
+                'schedule_value': schedule_value,
                 **(metadata or {})
             }
+            
+            # Handle limited intervals specially
+            if schedule_type == 'limited_interval':
+                seconds, max_runs = schedule_value.split(':')
+                max_runs = int(max_runs)
+                
+                # Store tracking data
+                self._limited_job_data[job_id] = {
+                    'max_runs': max_runs,
+                    'current_runs': 0,
+                    'original_prompt': prompt,
+                    'task_name': task_metadata['task_name']
+                }
             
             # Create trigger based on schedule type
             trigger = self._create_trigger(schedule_type, schedule_value)
@@ -254,16 +272,59 @@ class TaskScheduler:
             seconds = int(schedule_value)
             return IntervalTrigger(seconds=seconds)
             
+        elif schedule_type == 'limited_interval':
+            # schedule_value should be "seconds:repetitions" like "300:3"
+            seconds, max_runs = schedule_value.split(':')
+            seconds = int(seconds)
+            max_runs = int(max_runs)
+            
+            # Use regular IntervalTrigger without max_instances (not supported)
+            # We'll track the execution count manually
+            return IntervalTrigger(seconds=seconds)
+            
         else:
             raise ValueError(f"Unsupported schedule type: {schedule_type}")
     
     def _execute_scheduled_task(self, prompt: str, metadata: Dict[str, Any]):
         """Execute a scheduled task"""
         try:
+            job_id = metadata.get('job_id')
             logger.info(f"Executing scheduled task: {metadata['task_name']}")
+            
+            # Check if this is a limited interval job
+            if job_id in self._limited_job_data:
+                job_data = self._limited_job_data[job_id]
+                job_data['current_runs'] += 1
+                
+                logger.info(f"Limited interval job {job_id}: execution {job_data['current_runs']}/{job_data['max_runs']}")
             
             # Execute the workflow
             result = self.runner.run_workflow(prompt)
+            
+            # Determine success based on workflow state
+            # If result has an 'error' key, it means workflow failed before completion
+            # Otherwise, check if the state has errors
+            if isinstance(result, dict) and 'error' in result:
+                # Workflow failed during execution
+                success = False
+                error_msg = result.get('error')
+            else:
+                # Workflow completed, check for errors in state
+                errors = result.get('errors', []) if isinstance(result, dict) else []
+                success = len(errors) == 0
+                error_msg = '; '.join(errors) if errors else None
+            
+            # Check if we need to remove the job after successful execution
+            if job_id in self._limited_job_data:
+                job_data = self._limited_job_data[job_id]
+                if job_data['current_runs'] >= job_data['max_runs']:
+                    logger.info(f"Limited interval job {job_id} completed all {job_data['max_runs']} runs")
+                    # Remove the job after this execution
+                    try:
+                        self.scheduler.remove_job(job_id)
+                        del self._limited_job_data[job_id]
+                    except Exception as e:
+                        logger.warning(f"Could not remove completed job {job_id}: {e}")
             
             # Log the execution
             execution_log = {
@@ -271,17 +332,17 @@ class TaskScheduler:
                 'task_name': metadata['task_name'],
                 'prompt': prompt,
                 'executed_at': datetime.now().isoformat(),
-                'success': result.get('success', False),
-                'error': result.get('error'),
+                'success': success,
+                'error': error_msg,
                 'result_summary': self._create_result_summary(result)
             }
             
             self._log_execution(execution_log)
             
-            if result.get('success'):
+            if success:
                 logger.info(f"Scheduled task completed successfully: {metadata['task_name']}")
             else:
-                logger.error(f"Scheduled task failed: {metadata['task_name']}, Error: {result.get('error')}")
+                logger.error(f"Scheduled task failed: {metadata['task_name']}, Error: {error_msg}")
                 
         except Exception as e:
             logger.error(f"Error executing scheduled task: {e}")
@@ -296,17 +357,29 @@ class TaskScheduler:
             }
             self._log_execution(error_log)
     
-    def _create_result_summary(self, result: Dict[str, Any]) -> str:
+    def _create_result_summary(self, result: Any) -> str:
         """Create a summary of the execution result"""
-        if not result.get('success'):
+        # Handle error case (dict with 'error' key)
+        if isinstance(result, dict) and 'error' in result:
             return f"Failed: {result.get('error', 'Unknown error')}"
+        
+        # Handle WorkflowState (should be a dict-like object)
+        if not isinstance(result, dict):
+            return "Execution completed"
+        
+        # Check for errors in state
+        errors = result.get('errors', [])
+        if errors:
+            return f"Failed: {'; '.join(errors)}"
         
         # Extract key information from the result
         execution_results = result.get('execution_results', {})
-        steps_completed = len([r for r in execution_results.values() if r.get('success')])
-        total_steps = len(execution_results)
+        if execution_results:
+            steps_completed = len([r for r in execution_results.values() if isinstance(r, dict) and r.get('success')])
+            total_steps = len(execution_results)
+            return f"Completed {steps_completed}/{total_steps} steps successfully"
         
-        return f"Completed {steps_completed}/{total_steps} steps successfully"
+        return "Execution completed successfully"
     
     def _log_execution(self, log_data: Dict[str, Any]):
         """Log task execution to file"""
@@ -393,8 +466,38 @@ class ScheduleParser:
         - "daily at 9AM" -> {'type': 'daily', 'value': '09:00'}
         - "every Monday at 2PM" -> {'type': 'weekly', 'value': 'MON:14:00'}
         - "every 30 minutes" -> {'type': 'interval', 'value': '1800'}
+        - "every 5 minutes, 3 times" -> {'type': 'limited_interval', 'value': '300:3'}
         """
         schedule_text = schedule_text.lower().strip()
+        
+        # Limited repetition patterns (enhanced!)
+        import re
+        
+        # Pattern 1: "every X minutes, Y times"
+        limited_pattern1 = re.search(r'every\s+(\d+)\s+(minute|hour)s?,?\s*(\d+)\s*times?', schedule_text)
+        
+        # Pattern 2: "every X minutes once, for Y times" 
+        limited_pattern2 = re.search(r'every\s+(\d+)\s+(minute|hour)s?\s+once,?\s*for\s+(\d+)\s*times?', schedule_text)
+        
+        # Pattern 3: "for Y times" at the end
+        limited_pattern3 = re.search(r'every\s+(\d+)\s+(minute|hour)s?.*?for\s+(\d+)\s*times?', schedule_text)
+        
+        # Pattern 4: "repeat Y times"
+        limited_pattern4 = re.search(r'every\s+(\d+)\s+(minute|hour)s?.*?repeat\s+(\d+)\s*times?', schedule_text)
+        
+        # Check all patterns
+        for pattern in [limited_pattern1, limited_pattern2, limited_pattern3, limited_pattern4]:
+            if pattern:
+                number = int(pattern.group(1))
+                unit = pattern.group(2)
+                repetitions = int(pattern.group(3))
+                
+                if unit == 'minute':
+                    interval_seconds = number * 60
+                else:  # hour
+                    interval_seconds = number * 3600
+                    
+                return {'type': 'limited_interval', 'value': f"{interval_seconds}:{repetitions}"}
         
         # Daily patterns
         if 'daily' in schedule_text or 'every day' in schedule_text:
@@ -415,7 +518,6 @@ class ScheduleParser:
         
         # Interval patterns
         if 'every' in schedule_text and ('minute' in schedule_text or 'hour' in schedule_text):
-            import re
             number_match = re.search(r'(\d+)', schedule_text)
             if number_match:
                 number = int(number_match.group(1))

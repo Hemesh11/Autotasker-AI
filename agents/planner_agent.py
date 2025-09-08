@@ -4,8 +4,29 @@ Planner Agent: Converts natural language prompts into structured task plans
 
 import json
 import logging
+import os
+import sys
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv("config/.env")
+except ImportError:
+    # Try loading without dotenv
+    env_path = "config/.env"
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                if '=' in line and not line.startswith('#'):
+                    key, value = line.strip().split('=', 1)
+                    os.environ[key] = value.strip('"')
+
+# Add project root to Python path for direct execution
+if __name__ == "__main__":
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, project_root)
 
 from backend.utils import retry_on_failure
 from backend.llm_factory import create_llm_client, get_chat_completion, LLMClientFactory
@@ -308,26 +329,12 @@ Create the most efficient plan possible."""
         
         tasks = []
         
-        # Check for send email requests
-        if any(word in prompt_lower for word in ["send", "email to", "compose", "write email"]):
-            tasks.append({
-                "id": "gmail_send",
-                "type": "gmail",
-                "description": "Send email",
-                "parameters": {
-                    "operation": "send_email",
-                    "subject": "AutoTasker AI - Fallback Email",
-                    "body": f"This email was generated from your request: '{prompt}'\n\nAutoTasker AI is working with a fallback plan due to API limitations."
-                },
-                "dependencies": [],
-                "priority": 1
-            })
-        elif any(word in prompt_lower for word in ["email", "gmail", "inbox"]):
+        if any(word in prompt_lower for word in ["email", "gmail", "inbox"]):
             tasks.append({
                 "id": "gmail_fetch",
                 "type": "gmail",
                 "description": "Fetch recent emails",
-                "parameters": {"operation": "get_emails", "max_results": 10, "time_range": "1d"},
+                "parameters": {"max_results": 10, "time_range": "1d"},
                 "dependencies": [],
                 "priority": 1
             })

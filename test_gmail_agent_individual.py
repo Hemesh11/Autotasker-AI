@@ -90,18 +90,19 @@ def test_gmail_agent():
             "task": {
                 "parameters": {
                     "operation": "search_emails", 
-                    "query": "leetcode",
-                    "limit": 5
+                    "query": "subject:meeting",
+                    "limit": 3
                 }
             }
         },
         {
-            "name": "Get Recent Email Summary",
+            "name": "Send Test Email",
             "task": {
                 "parameters": {
-                    "operation": "get_emails",
-                    "limit": 10,
-                    "filter": "recent"
+                    "operation": "send_email",
+                    "to": "your-email@gmail.com",  # Will be replaced with sender's email
+                    "subject": "AutoTasker AI Test Email",
+                    "body": f"This is a test email sent at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 }
             }
         }
@@ -117,13 +118,28 @@ def test_gmail_agent():
         print("-" * 30)
         
         try:
+            # For send email test, use agent's own email as recipient
+            if test_case['name'] == "Send Test Email" and agent.service:
+                try:
+                    # Get user's email address
+                    profile = agent.service.users().getProfile(userId='me').execute()
+                    user_email = profile.get('emailAddress')
+                    if user_email:
+                        test_case['task']['parameters']['to'] = user_email
+                        print(f"Sending test email to: {user_email}")
+                except:
+                    print("Could not get user email, using placeholder")
+            
             result = agent.execute_task(test_case["task"])
             
             print(f"Success: {result.get('success', False)}")
             
-            # Show full content (no truncation)
+            # Show content preview
             content = result.get('content', 'No content')
-            print(f"Content: {content}")
+            if len(content) > 200:
+                print(f"Content: {content[:200]}...")
+            else:
+                print(f"Content: {content}")
             
             if result.get('error'):
                 print(f"Error: {result['error']}")
@@ -135,14 +151,6 @@ def test_gmail_agent():
                     for key, value in data.items():
                         if key == 'emails' and isinstance(value, list):
                             print(f"Found {len(value)} emails")
-                            # Show details of each email
-                            for idx, email in enumerate(value, 1):
-                                print(f"  [{idx}] From: {email.get('from', 'Unknown')}")
-                                print(f"      Subject: {email.get('subject', 'No Subject')}")
-                                print(f"      Date: {email.get('date', 'Unknown')}")
-                                if email.get('snippet'):
-                                    print(f"      Preview: {email['snippet']}")
-                                print()
                         elif key not in ['emails']:
                             print(f"{key}: {value}")
             

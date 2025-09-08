@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -241,65 +241,101 @@ def execute_task_interface():
     """Main task execution interface"""
     
     st.markdown("## 💬 Enter Your Task")
-    
+
     # Sample prompts for quick selection
     col1, col2 = st.columns([3, 1])
-    
+
     with col1:
         prompt = st.text_area(
             "Describe what you want to automate:",
-            placeholder="Example: Every day at 9AM, send me 2 LeetCode questions and summarize yesterday's emails",
+            placeholder="Example: Every day at 9AM, send me 2 LeetCode questions\nOr: Send coding questions every Monday at 2PM",
             height=100,
-            help="Use natural language to describe your automation task"
+            help="Use natural language including schedule (daily, weekly, etc.) or use manual controls below"
         )
     
     with col2:
         st.markdown("**Quick Examples:**")
         
         sample_prompts = [
-            "Generate 3 coding questions",
-            "Summarize today's emails",
-            "Daily GitHub commit summary",
-            "Send me DSA problems",
-            "Check unread emails"
+            "Generate 3 coding questions daily at 9AM",
+            "Send me DSA problems every Monday at 2PM", 
+            "Daily GitHub commit summary at 8AM",
+            "Check unread emails every 30 minutes",
+            "Weekly coding practice on Friday at 5PM",
+            "Generate 2 questions every 5 minutes, 3 times"
         ]
         
         for sample in sample_prompts:
             if st.button(f"📝 {sample}", key=f"sample_{sample}"):
                 st.session_state.selected_prompt = sample
-    
-    # Use selected prompt if available
+      # Use selected prompt if available
     if 'selected_prompt' in st.session_state:
         prompt = st.session_state.selected_prompt
         del st.session_state.selected_prompt
+
+    # Smart Schedule Detection
+    detected_schedule = None
+    if prompt.strip():
+        try:
+            from backend.scheduler import ScheduleParser
+            detected_schedule = ScheduleParser.parse_schedule(prompt)
+        except:
+            detected_schedule = None
+
+    # Show detected schedule if found
+    if detected_schedule:
+        st.success(f"🧠 **Smart Detection:** Found schedule pattern - {detected_schedule['type']} at {detected_schedule['value']}")
     
     # Execution options
     st.markdown("### ⚙️ Execution Options")
     
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        schedule_type = st.selectbox(
-            "Schedule Type:",
-            ["Execute Once", "Daily", "Weekly", "Custom"],
-            help="How often should this task run?"
-        )
-    
-    with col2:
-        if schedule_type != "Execute Once":
-            schedule_time = st.time_input(
-                "Execution Time:",
-                value=datetime.strptime("09:00", "%H:%M").time(),
-                help="When should the task run?"
+    # Mode selection
+    execution_mode = st.radio(
+        "Choose execution mode:",
+        ["🧠 Auto-detect from prompt", "⚙️ Manual configuration"],
+        help="Auto-detect parses schedule from your natural language, Manual lets you set it explicitly"
+    )
+
+    if execution_mode == "⚙️ Manual configuration":
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            schedule_type = st.selectbox(
+                "Schedule Type:",
+                ["Execute Once", "Daily", "Weekly", "Custom"],
+                help="How often should this task run?"
             )
-    
-    with col3:
-        priority = st.selectbox(
-            "Priority:",
-            ["High", "Medium", "Low"],
-            index=1,
-            help="Task execution priority"
-        )
+        
+        with col2:
+            if schedule_type != "Execute Once":
+                schedule_time = st.time_input(
+                    "Execution Time:",
+                    value=datetime.strptime("09:00", "%H:%M").time(),
+                    help="When should the task run?"
+                )
+        
+        with col3:
+            priority = st.selectbox(
+                "Priority:",
+                ["High", "Medium", "Low"],
+                index=1,
+                help="Task execution priority"
+            )
+    else:
+        # Auto-detect mode
+        if detected_schedule:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.info(f"**Schedule Type:** {detected_schedule['type'].title()}")
+            with col2:
+                st.info(f"**Schedule Value:** {detected_schedule['value']}")
+            
+            schedule_type = detected_schedule['type']
+            priority = "Medium"  # Default priority for auto-detected
+        else:
+            st.warning("⚠️ No schedule pattern detected in prompt. Will execute once.")
+            schedule_type = "Execute Once"
+            priority = "Medium"
     
     # Execute button
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -307,11 +343,15 @@ def execute_task_interface():
     with col2:
         if st.button("🚀 Execute Task", type="primary", use_container_width=True):
             if prompt.strip():
-                execute_task(prompt, schedule_type, priority)
+                # Pass detected schedule if using auto-detect mode
+                schedule_info = None
+                if execution_mode == "🧠 Auto-detect from prompt" and detected_schedule:
+                    schedule_info = detected_schedule
+                execute_task(prompt, schedule_type, priority, schedule_info)
             else:
                 st.error("Please enter a task description!")
 
-def execute_task(prompt: str, schedule_type: str, priority: str):
+def execute_task(prompt: str, schedule_type: str, priority: str, schedule_info: Optional[Dict[str, str]] = None):
     """Execute a task with the given parameters"""
     
     # Progress tracking
@@ -326,6 +366,10 @@ def execute_task(prompt: str, schedule_type: str, priority: str):
         
         status_text.text("🔧 Loading configuration...")
         progress_bar.progress(20)
+
+        # Show schedule information if auto-detected
+        if schedule_info:
+            st.info(f"🧠 **Smart Scheduling:** Will execute {schedule_info['type']} at {schedule_info['value']}")
         
         # Initialize AutoTasker with better error handling
         try:
@@ -368,15 +412,52 @@ def execute_task(prompt: str, schedule_type: str, priority: str):
         status_text.text("⚡ Executing workflow...")
         progress_bar.progress(70)
         
-        # Execute workflow
-        try:
-            result = runner.run_workflow(prompt)
-        except TimeoutError:
-            st.error("❌ Task execution timed out. Please try a simpler task.")
-            return
-        except Exception as e:
-            st.error(f"❌ Workflow execution failed: {str(e)}")
-            return
+        # Handle scheduling vs immediate execution
+        if schedule_info and schedule_info['type'] != 'once':
+            # Schedule the task using the global scheduler
+            try:
+                # Initialize global scheduler if not exists
+                if 'scheduler' not in st.session_state:
+                    from backend.scheduler import create_scheduler
+                    st.session_state.scheduler = create_scheduler("config/config.yaml")
+                    if not st.session_state.scheduler.is_running:
+                        st.session_state.scheduler.start()
+                
+                scheduler = st.session_state.scheduler
+                
+                # Schedule the task
+                task_name = f"AutoTask_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                job_id = scheduler.schedule_task(
+                    prompt=prompt,
+                    schedule_type=schedule_info['type'],
+                    schedule_value=schedule_info['value'],
+                    task_name=task_name
+                )
+                
+                result = {
+                    "success": True,
+                    "scheduled": True,
+                    "job_id": job_id,
+                    "schedule_type": schedule_info['type'],
+                    "schedule_value": schedule_info['value'],
+                    "message": f"Task scheduled successfully! Will run {schedule_info['type']} at {schedule_info['value']}"
+                }
+                
+                st.success(f"✅ **Task Scheduled!** Will execute {schedule_info['type']} at {schedule_info['value']}")
+                
+            except Exception as e:
+                st.error(f"❌ Failed to schedule task: {str(e)}")
+                return
+        else:
+            # Execute immediately
+            try:
+                result = runner.run_workflow(prompt)
+            except TimeoutError:
+                st.error("❌ Task execution timed out. Please try a simpler task.")
+                return
+            except Exception as e:
+                st.error(f"❌ Workflow execution failed: {str(e)}")
+                return
         
         # Validate result
         if not result:
@@ -394,10 +475,12 @@ def execute_task(prompt: str, schedule_type: str, priority: str):
             "timestamp": datetime.now().isoformat(),
             "prompt": prompt,
             "schedule_type": schedule_type,
+            "schedule_info": schedule_info,
             "priority": priority,
             "result": result,
             "success": result.get("success", False) and not result.get("error"),
-            "execution_time": datetime.now().isoformat()
+            "execution_time": datetime.now().isoformat(),
+            "scheduled": result.get("scheduled", False)
         }
         
         st.session_state.task_history.insert(0, task_record)
@@ -837,7 +920,7 @@ def scheduler_interface():
     if 'scheduler' not in st.session_state:
         try:
             from backend.scheduler import create_scheduler
-            st.session_state.scheduler = create_scheduler()
+            st.session_state.scheduler = create_scheduler("config/config.yaml")
             if not st.session_state.scheduler.is_running:
                 st.session_state.scheduler.start()
         except Exception as e:

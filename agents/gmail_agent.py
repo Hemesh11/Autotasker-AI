@@ -84,18 +84,14 @@ class GmailAgent:
             Task execution results
         """
         
-        parameters = task.get("parameters", {})
-        operation = parameters.get("operation", "").lower()
         task_type = task.get("description", "").lower()
+        parameters = task.get("parameters", {})
         
         try:
-            # Check operation parameter first, then fall back to description
-            if operation == "send_email" or "send" in task_type:
-                return self.send_email(parameters)
-            elif operation == "search_emails":
-                return {"success": True, "content": "Search emails", "data": {"emails": self.search_emails(parameters.get("query", ""), parameters.get("limit", 10))}}
-            elif operation == "get_emails" or "fetch" in task_type or "get" in task_type:
+            if "fetch" in task_type or "get" in task_type:
                 return self.fetch_emails(parameters)
+            elif "send" in task_type:
+                return self.send_email(parameters)
             else:
                 # Default to fetching emails
                 return self.fetch_emails(parameters)

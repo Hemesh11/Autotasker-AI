@@ -44,6 +44,7 @@ class WorkflowState(TypedDict):
     email_content: str
     logs: List[Dict[str, Any]]
     memory_check: Dict[str, Any]
+    summarization_completed: bool
 
 
 class AutoTaskerRunner:
@@ -296,9 +297,14 @@ class AutoTaskerRunner:
                 
                 self.logger.info(f"Summarization completed")
             
+            # Mark summarization as completed to prevent recursion
+            state["summarization_completed"] = True
+            
         except Exception as e:
             self.logger.error(f"Summarization failed: {e}")
             state["errors"].append(f"Summarization error: {str(e)}")
+            # Even if summarization fails, mark as completed to prevent infinite loop
+            state["summarization_completed"] = True
             
         return state
     
@@ -365,7 +371,7 @@ class AutoTaskerRunner:
         
         if state["errors"] and state.get("retry_count", 0) < max_retries:
             return "retry"
-        elif any("gmail" in key for key in state["execution_results"].keys()):
+        elif any("gmail" in key for key in state["execution_results"].keys()) and not state.get("summarization_completed", False):
             return "summarize"
         else:
             return "continue"
@@ -410,13 +416,16 @@ class AutoTaskerRunner:
             retry_count=0,
             email_content="",
             logs=[],
-            memory_check={}
+            memory_check={},
+            summarization_completed=False
         )
         
         self.logger.info(f"Starting workflow for prompt: {prompt}")
         
         try:
-            final_state = self.workflow.invoke(initial_state)
+            # Set recursion limit for safety
+            recursion_limit = self.config.get("app", {}).get("recursion_limit", 50)
+            final_state = self.workflow.invoke(initial_state, config={"recursion_limit": recursion_limit})
             self.logger.info(f"Workflow completed successfully")
             return final_state
             

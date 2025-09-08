@@ -691,20 +691,21 @@ class LeetCodeAgent:
         
         try:
             description = task.get("description", "")
+            context = task.get("context", {})
             task_type = self._analyze_task_type(description)
             
             self.logger.info(f"Executing LeetCode task: {task_type}")
             
             if task_type == "daily_questions":
-                return self._handle_daily_questions(description)
+                return self._handle_daily_questions(description, context)
             elif task_type == "study_plan":
-                return self._handle_study_plan(description)
+                return self._handle_study_plan(description, context)
             elif task_type == "topic_specific":
-                return self._handle_topic_specific(description)
+                return self._handle_topic_specific(description, context)
             elif task_type == "difficulty_specific":
-                return self._handle_difficulty_specific(description)
+                return self._handle_difficulty_specific(description, context)
             else:
-                return self._handle_general_request(description)
+                return self._handle_general_request(description, context)
                 
         except Exception as e:
             self.logger.error(f"LeetCode task execution failed: {e}")
@@ -723,14 +724,14 @@ class LeetCodeAgent:
             return "daily_questions"
         elif any(word in description_lower for word in ["plan", "20 days", "study plan", "curriculum", "roadmap"]):
             return "study_plan"
-        elif any(word in description_lower for word in ["topic", "arrays", "strings", "trees", "graphs", "dp"]):
+        elif any(word in description_lower for word in ["topic", "arrays", "array", "strings", "string", "trees", "tree", "graphs", "graph", "dp", "dynamic", "programming", "linked", "list", "stack", "queue", "heap", "hash", "two", "pointer", "sliding", "window", "binary", "search", "sort", "greedy", "backtrack", "dfs", "bfs"]):
             return "topic_specific"
         elif any(word in description_lower for word in ["easy", "medium", "hard", "difficulty"]):
             return "difficulty_specific"
         else:
             return "general_request"
     
-    def _handle_daily_questions(self, description: str) -> Dict[str, Any]:
+    def _handle_daily_questions(self, description: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Handle daily question requests"""
         
         # Parse the request for details
@@ -765,7 +766,7 @@ class LeetCodeAgent:
             "schedule_info": request_details
         }
     
-    def _handle_study_plan(self, description: str) -> Dict[str, Any]:
+    def _handle_study_plan(self, description: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Handle structured study plan requests"""
         
         plan_details = self._parse_study_plan_request(description)
@@ -785,7 +786,7 @@ class LeetCodeAgent:
             "plan_details": plan_details
         }
     
-    def _handle_topic_specific(self, description: str) -> Dict[str, Any]:
+    def _handle_topic_specific(self, description: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Handle topic-specific requests"""
         
         topic_details = self._parse_topic_request(description)
@@ -794,6 +795,16 @@ class LeetCodeAgent:
             count=topic_details["count"],
             difficulty=topic_details["difficulty"]
         )
+        
+        if not questions:
+            return {
+                "success": False,
+                "error": "Failed to generate questions",
+                "content": "No LeetCode questions were generated"
+            }
+        
+        # Save to memory
+        self._save_questions_to_memory(questions)
         
         content = self._format_topic_questions_content(questions, topic_details)
         
@@ -805,15 +816,28 @@ class LeetCodeAgent:
             "topic_details": topic_details
         }
     
-    def _handle_difficulty_specific(self, description: str) -> Dict[str, Any]:
+    def _handle_difficulty_specific(self, description: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Handle difficulty-specific requests"""
         
-        diff_details = self._parse_difficulty_request(description)
+        if context is None:
+            context = {}
+            
+        diff_details = self._parse_difficulty_request(description, context)
         questions = self._generate_difficulty_questions(
             difficulty=diff_details["difficulty"],
             count=diff_details["count"],
             topics=diff_details["topics"]
         )
+        
+        if not questions:
+            return {
+                "success": False,
+                "error": "Failed to generate questions",
+                "content": "No LeetCode questions were generated"
+            }
+        
+        # Save to memory
+        self._save_questions_to_memory(questions)
         
         content = self._format_difficulty_questions_content(questions, diff_details)
         
@@ -825,10 +849,23 @@ class LeetCodeAgent:
             "difficulty_details": diff_details
         }
     
-    def _handle_general_request(self, description: str) -> Dict[str, Any]:
+    def _handle_general_request(self, description: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Handle general LeetCode requests"""
         
-        questions = self._generate_general_questions(description)
+        # Parse the count from description or use default
+        requested_count = self._extract_count_from_description(description)
+        questions = self._generate_general_questions(description, requested_count)
+        
+        if not questions:
+            return {
+                "success": False,
+                "error": "Failed to generate questions",
+                "content": "No LeetCode questions were generated"
+            }
+        
+        # Save to memory
+        self._save_questions_to_memory(questions)
+        
         content = self._format_general_questions_content(questions, description)
         
         return {
@@ -983,27 +1020,61 @@ class LeetCodeAgent:
             "difficulty": difficulty
         }
     
-    def _parse_difficulty_request(self, description: str) -> Dict[str, Any]:
+    def _parse_difficulty_request(self, description: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Parse difficulty-specific request details"""
         
+        if context is None:
+            context = {}
+            
         description_lower = description.lower()
         
-        difficulty = "medium"
-        if "easy" in description_lower:
-            difficulty = "easy"
-        elif "hard" in description_lower:
-            difficulty = "hard"
+        # Get difficulty from context first, then description
+        difficulty = context.get("difficulty", "medium")
+        if not context.get("difficulty"):
+            if "easy" in description_lower:
+                difficulty = "easy"
+            elif "hard" in description_lower:
+                difficulty = "hard"
         
-        count = 5
-        import re
-        numbers = re.findall(r'\b(\d+)\b', description)
-        if numbers:
-            count = int(numbers[0])
+        # Get count from context first, then description
+        count = context.get("count", 5)
+        if not context.get("count"):
+            import re
+            numbers = re.findall(r'\b(\d+)\b', description)
+            if numbers:
+                count = int(numbers[0])
+        
+        # Get topics from context first, then description
+        topics = []
+        if context.get("topic"):
+            topics = [context["topic"]]
+        elif context.get("topics"):
+            topics = context["topics"]
+        else:
+            # Try to extract from description
+            topic_keywords = {
+                "array": "arrays", "arrays": "arrays",
+                "string": "strings", "strings": "strings", 
+                "tree": "trees", "trees": "trees",
+                "graph": "graphs", "graphs": "graphs",
+                "dp": "dynamic_programming", "dynamic": "dynamic_programming",
+                "linked": "linked_lists", "list": "linked_lists",
+                "stack": "stacks", "queue": "queues",
+                "hash": "hash_tables", "heap": "heaps",
+                "two pointer": "two_pointers", "pointer": "two_pointers",
+                "binary search": "binary_search", "search": "binary_search",
+                "sort": "sorting", "greedy": "greedy"
+            }
+            
+            for keyword, topic in topic_keywords.items():
+                if keyword in description_lower:
+                    topics = [topic]
+                    break
         
         return {
             "difficulty": difficulty,
             "count": count,
-            "topics": []
+            "topics": topics
         }
     
     def _generate_daily_questions(self, count: int, difficulty_level: str, topics: List[str]) -> List[Dict[str, Any]]:
@@ -1136,25 +1207,40 @@ class LeetCodeAgent:
         """Generate questions for specific topic"""
         
         questions = []
+        session_used_questions = set()  # Track duplicates within this session
         attempts = 0
-        max_attempts = count * 2
+        max_attempts = count * 3  # Increase attempts to handle duplicates better
         
         while len(questions) < count and attempts < max_attempts:
             attempts += 1
             problems = self._get_problems_from_sources(topic, difficulty, 1)
             if problems:
                 question = problems[0]
-                if not self._is_question_recently_sent(question):
+                question_id = f"{question.get('number', '')}-{question.get('title', '')}"
+                
+                # Check both memory and current session duplicates
+                if (question_id not in session_used_questions and 
+                    not self._is_question_recently_sent(question)):
                     questions.append(question)
+                    session_used_questions.add(question_id)
+                    self.logger.info(f"Added unique question: {question.get('title', 'Unknown')} (#{question.get('number', 'N/A')})")
+                else:
+                    self.logger.debug(f"Skipped duplicate: {question.get('title', 'Unknown')} (#{question.get('number', 'N/A')})")
         
         # Force add from curated DB if needed
         if len(questions) < count:
             try:
+                self.logger.warning(f"Only got {len(questions)}/{count} unique questions, using curated fallback")
                 fallback_problems = self.curated_db.get_problems(topic, difficulty, count - len(questions))
                 for problem in fallback_problems:
                     if len(questions) >= count:
                         break
-                    questions.append(problem)
+                    problem_id = f"{problem.get('number', '')}-{problem.get('title', '')}"
+                    if (problem_id not in session_used_questions and 
+                        not self._is_question_recently_sent(problem)):
+                        questions.append(problem)
+                        session_used_questions.add(problem_id)
+                        self.logger.info(f"Added curated fallback: {problem.get('title', 'Unknown')}")
             except Exception as e:
                 self.logger.error(f"Topic fallback failed: {e}")
         
@@ -1193,7 +1279,36 @@ class LeetCodeAgent:
         
         return questions
     
-    def _generate_general_questions(self, description: str) -> List[Dict[str, Any]]:
+    def _extract_count_from_description(self, description: str) -> int:
+        """Extract the number of questions requested from description"""
+        
+        import re
+        
+        # Look for numbers in the description
+        numbers = re.findall(r'\b(\d+)\b', description.lower())
+        
+        # Common patterns
+        if "2" in description or "two" in description:
+            return 2
+        elif "1" in description or "one" in description:
+            return 1
+        elif "3" in description or "three" in description:
+            return 3
+        elif "4" in description or "four" in description:
+            return 4
+        elif "5" in description or "five" in description:
+            return 5
+        
+        # If we found numbers, use the first reasonable one
+        for num_str in numbers:
+            num = int(num_str)
+            if 1 <= num <= 10:  # Reasonable range
+                return num
+        
+        # Default to 3 if nothing found
+        return 3
+    
+    def _generate_general_questions(self, description: str, count: int = 3) -> List[Dict[str, Any]]:
         """Generate general LeetCode questions"""
         
         questions = []
@@ -1201,7 +1316,7 @@ class LeetCodeAgent:
         attempts = 0
         max_attempts = 10
         
-        while len(questions) < 5 and attempts < max_attempts:
+        while len(questions) < count and attempts < max_attempts:
             attempts += 1
             topic = random.choice(popular_topics)
             problems = self._get_problems_from_sources(topic, "medium", 1)
@@ -1211,14 +1326,14 @@ class LeetCodeAgent:
                     questions.append(question)
         
         # Force add from curated DB if needed
-        if len(questions) < 5:
+        if len(questions) < count:
             for topic in popular_topics:
-                if len(questions) >= 5:
+                if len(questions) >= count:
                     break
                 try:
-                    fallback_problems = self.curated_db.get_problems(topic, "medium", 5 - len(questions))
+                    fallback_problems = self.curated_db.get_problems(topic, "medium", count - len(questions))
                     for problem in fallback_problems:
-                        if len(questions) >= 5:
+                        if len(questions) >= count:
                             break
                         questions.append(problem)
                 except Exception as e:
@@ -1479,19 +1594,33 @@ class LeetCodeAgent:
     def _save_questions_to_memory(self, questions: List[Dict[str, Any]]) -> None:
         """Save sent questions to memory"""
         
+        self.logger.info(f"💾 Saving {len(questions)} questions to memory")
+        
         for question in questions:
             question_id = f"{question.get('number', '')}-{question.get('title', '')}"
+            self.logger.info(f"💾 Adding to memory: {question_id}")
+            self.logger.debug(f"💾 Question data: {question}")
             self.sent_questions.add(question_id)
+        
+        self.logger.info(f"💾 Total questions in memory set: {len(self.sent_questions)}")
         
         # Save to file
         try:
-            with open(self.memory_file, 'w') as f:
-                json.dump({
-                    "sent_questions": list(self.sent_questions),
-                    "last_updated": datetime.now().isoformat()
-                }, f, indent=2)
+            memory_data = {
+                "sent_questions": list(self.sent_questions),
+                "last_updated": datetime.now().isoformat()
+            }
+            self.logger.info(f"💾 Writing to file: {memory_data}")
+            
+            with open(self.memory_file, 'w', encoding='utf-8') as f:
+                json.dump(memory_data, f, indent=2, ensure_ascii=False)
+            
+            self.logger.info(f"💾 Successfully saved memory to {self.memory_file}")
+            
         except Exception as e:
             self.logger.error(f"Failed to save memory: {e}")
+            import traceback
+            self.logger.error(f"Memory save traceback: {traceback.format_exc()}")
     
     def _load_memory(self) -> Set[str]:
         """Load memory of sent questions"""
@@ -1500,7 +1629,11 @@ class LeetCodeAgent:
             if os.path.exists(self.memory_file):
                 with open(self.memory_file, 'r') as f:
                     data = json.load(f)
-                    return set(data.get("sent_questions", []))
+                    # Handle both old format (list) and new format (dict)
+                    if isinstance(data, list):
+                        return set(data)
+                    elif isinstance(data, dict):
+                        return set(data.get("sent_questions", []))
         except Exception as e:
             self.logger.error(f"Failed to load memory: {e}")
         

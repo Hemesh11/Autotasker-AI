@@ -5,6 +5,7 @@ app:
   debug: true
   max_retries: 3
   timeout_seconds: 30
+  recursion_limit: 50
 
 # LLM Configuration
 llm:
@@ -38,36 +39,65 @@ github:
   max_issues: 20                  # Max issues to fetch
   include_private: false          # Whether to include private repos
 
-# Update the agents section to include GitHub agent:
+# Agent-specific configurations
 agents:
   planner:
-    model: "openai/gpt-4-turbo-preview"
+    model: "meta-llama/llama-3.3-70b-instruct"
     temperature: 0.3
   summarizer:
-    model: "openai/gpt-3.5-turbo"
+    model: "meta-llama/llama-3.3-70b-instruct"
     temperature: 0.5
   dsa_generator:
-    model: "openai/gpt-4-turbo-preview"
+    model: "meta-llama/llama-3.3-70b-instruct"
     temperature: 0.8
   # ADD THESE:
-  github:
-    model: "openai/gpt-3.5-turbo"
-    temperature: 0.4
-    max_analysis_commits: 50
-  gmail:
-    model: "openai/gpt-3.5-turbo" 
-    temperature: 0.3
-    max_emails_per_request: 20
   email:
     default_provider: "ses"  # or "gmail"
     subject_prefix: "[AutoTasker AI]"
+    memory:
+      enable_similarity: true
+      similarity_threshold: 0.7  # Prevent duplicate email sends
   logger:
     backends: ["file", "s3"]  # file, s3, cloudwatch
     retention_days: 30
+    memory:
+      enable_similarity: false  # Always log
+  summarizer:
+    model: "meta-llama/llama-3.3-70b-instruct"
+    temperature: 0.5
+    memory:
+      enable_similarity: true
+      similarity_threshold: 0.6  # Prevent duplicate summaries
   memory:
     backend: "json"  # json, redis, vector
     max_entries: 1000
     retention_days: 30
+    enable_similarity: true
+    similarity_threshold: 0.6
+  gmail:
+    model: "openai/gpt-3.5-turbo" 
+    temperature: 0.3
+    max_emails_per_request: 20
+    memory:
+      enable_similarity: true
+      similarity_threshold: 0.55  # Stricter for Gmail operations
+  github:
+    model: "openai/gpt-3.5-turbo"
+    temperature: 0.4
+    max_analysis_commits: 50
+    memory:
+      enable_similarity: true
+      similarity_threshold: 0.65  # Moderate for GitHub operations
+  planner:
+    model: "meta-llama/llama-3.3-70b-instruct"
+    temperature: 0.3
+    memory:
+      enable_similarity: false  # Always allow re-planning
+  dsa_generator:
+    model: "meta-llama/llama-3.3-70b-instruct"
+    temperature: 0.8
+    memory:
+      enable_similarity: false  # Always generate fresh questions
 # Scheduling
 scheduler:
   default_time: "09:00"
@@ -78,13 +108,28 @@ scheduler:
 memory:
   retention_days: 30
   use_vector_store: false
-  similarity_threshold: 0.8
+  similarity_threshold: 0.55
   
 # Logging
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file_path: "data/logs/autotasker.log"
+  
+  # Logger Agent backends
+  backends:
+    local:
+      enabled: true
+      csv_path: "data/logs/execution_log.csv"
+      detailed_logs_dir: "data/logs/detailed"
+    google_sheets:
+      enabled: false  # Set to true when configured
+      spreadsheet_id: ""  # Add your Google Sheets ID
+      worksheet_name: "AutoTasker_Logs"
+    aws_s3:
+      enabled: false  # Set to true when configured
+      bucket_name: "autotasker-logs"
+      key_prefix: "execution-logs/"
   
 # Cloud Services
 aws:

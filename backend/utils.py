@@ -90,14 +90,24 @@ def setup_logging(logging_config: Dict[str, Any]) -> logging.Logger:
     log_file = logging_config.get("file_path", "data/logs/autotasker.log")
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     
+    # Configure file handler with UTF-8 encoding
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(getattr(logging, logging_config.get("level", "INFO")))
+    file_handler.setFormatter(logging.Formatter(
+        logging_config.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    ))
+    
+    # Configure stream handler with error handling for Unicode
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(getattr(logging, logging_config.get("level", "INFO")))
+    stream_handler.setFormatter(logging.Formatter(
+        logging_config.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    ))
+    
     # Configure logging
     logging.basicConfig(
         level=getattr(logging, logging_config.get("level", "INFO")),
-        format=logging_config.get("format", "%(asctime)s - %(levelname)s - %(message)s"),
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
+        handlers=[file_handler, stream_handler]
     )
     
     logger = logging.getLogger("AutoTasker")
@@ -171,14 +181,14 @@ def save_json_file(data: Any, file_path: str) -> None:
     """Save data to JSON file"""
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=2, default=str)
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, default=str, ensure_ascii=False)
 
 
 def load_json_file(file_path: str) -> Any:
     """Load data from JSON file"""
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
         return None
@@ -265,3 +275,57 @@ class TaskTimer:
         if self.start_time and self.end_time:
             return (self.end_time - self.start_time).total_seconds()
         return None
+
+
+def clean_llm_response(response: str) -> str:
+    """
+    Clean LLM response to extract JSON content
+    
+    Args:
+        response: Raw LLM response that may contain markdown or extra text
+        
+    Returns:
+        Cleaned response content
+    """
+    import re
+    
+    # Remove markdown code blocks
+    if "```json" in response:
+        # Extract content between ```json and ```
+        pattern = r'```json\s*(.*?)\s*```'
+        match = re.search(pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    elif "```" in response:
+        # Extract content between any ``` blocks
+        pattern = r'```.*?\s*(.*?)\s*```'
+        match = re.search(pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    
+    # Remove common prefixes and suffixes
+    response = response.strip()
+    response = re.sub(r'^(Here\'s|Here is|The response is):\s*', '', response, flags=re.IGNORECASE)
+    response = re.sub(r'^Response:\s*', '', response, flags=re.IGNORECASE)
+    
+    return response.strip()
+
+
+def parse_llm_json(response: str) -> Any:
+    """
+    Parse JSON from LLM response with error handling
+    
+    Args:
+        response: LLM response that should contain JSON
+        
+    Returns:
+        Parsed JSON data
+        
+    Raises:
+        ValueError: If JSON cannot be parsed
+    """
+    try:
+        cleaned = clean_llm_response(response)
+        return json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON from LLM response: {e}\nContent: {cleaned[:200]}")
