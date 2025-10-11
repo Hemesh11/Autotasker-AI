@@ -54,11 +54,11 @@ def test_leetcode_memory():
     # Test task execution
     test_task = {
         "action": "get_daily_questions",
-        "description": "Get 2 easy array questions for practice",
+        "description": "Get 2 easy string questions for practice",
         "context": {
             "count": 2,
             "difficulty": "easy",
-            "topic": "array"
+            "topic": "strings"
         }
     }
     

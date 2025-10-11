@@ -80,14 +80,14 @@ def test_calendar_agent():
             "name": "Create Event - Tomorrow Meeting",
             "task": {
                 "type": "create_event", 
-                "description": "Team meeting tomorrow at 2 PM for 1 hour with 15 minute reminder"
+                "description": "Team meeting tomorrow at 6 PM IST with 1 hour reminder"
             }
         },
         {
             "name": "Create Event - Specific Date",
             "task": {
                 "type": "create_event",
-                "description": "Doctor appointment on August 28th at 10:30 AM with 30 minute reminder"
+                "description": "Doctor appointment on September 28th at 10:30 AM IST with 30 minute reminder"
             }
         },
         {
