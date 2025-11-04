@@ -100,6 +100,14 @@ cover/
 **/aws-credentials
 **/aws-config
 cloudformation-outputs.json
+.aws-sam/
+samconfig.toml.bak
+
+# AWS SAM Build Artifacts
+.aws-sam/
+build/
+packaged.yaml
+template-output.yaml
 
 # Google Cloud
 **/service-account*.json

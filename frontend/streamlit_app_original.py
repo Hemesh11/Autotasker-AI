@@ -10,11 +10,6 @@ import sys
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple, Optional
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', '.env')
-load_dotenv(env_path)
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -541,18 +536,10 @@ def display_execution_results(result: Dict[str, Any]):
     if result.get("error"):
         st.markdown(f'<div class="error-box">❌ <b>Execution Failed:</b> {result["error"]}</div>', 
                    unsafe_allow_html=True)
-        
-        # Show performance metrics even on error
-        if result.get("performance_metrics"):
-            display_performance_metrics(result["performance_metrics"])
         return
     
     st.markdown('<div class="success-box">✅ <b>Task executed successfully!</b></div>', 
                unsafe_allow_html=True)
-    
-    # Show performance metrics at the top
-    if result.get("performance_metrics"):
-        display_performance_metrics(result["performance_metrics"])
     
     # Show task plan
     if "task_plan" in result:
@@ -560,13 +547,11 @@ def display_execution_results(result: Dict[str, Any]):
         
         plan = result["task_plan"]
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Intent", plan.get("intent", "Unknown")[:30] + "...")
-        with col2:
-            st.metric("Total Tasks", plan.get("total_tasks", 0))
-        with col3:
-            st.metric("Schedule", plan.get("schedule", "once"))
+        st.json({
+            "Intent": plan.get("intent", "Unknown"),
+            "Total Tasks": plan.get("total_tasks", 0),
+            "Schedule": plan.get("schedule", "once")
+        })
         
         # Show individual tasks
         tasks = plan.get("tasks", [])
@@ -574,7 +559,7 @@ def display_execution_results(result: Dict[str, Any]):
             st.markdown("#### Task Breakdown:")
             
             for i, task in enumerate(tasks, 1):
-                with st.expander(f"Task {i}: {task.get('description', 'Unknown')}", expanded=False):
+                with st.expander(f"Task {i}: {task.get('description', 'Unknown')}"):
                     col1, col2 = st.columns(2)
                     
                     with col1:
@@ -582,153 +567,27 @@ def display_execution_results(result: Dict[str, Any]):
                         st.write(f"**Priority:** {task.get('priority', 'Unknown')}")
                     
                     with col2:
-                        deps = task.get('dependencies', [])
-                        st.write(f"**Dependencies:** {', '.join(deps) if deps else 'None'}")
+                        st.write(f"**Dependencies:** {', '.join(task.get('dependencies', []))}")
                         st.write(f"**Parameters:** {len(task.get('parameters', {}))}")
     
-    # Show execution results with proper content display
+    # Show execution results
     if "execution_results" in result:
         st.markdown("### 📊 Execution Results")
         
         exec_results = result["execution_results"]
         
-        # Display each agent's results
         for key, value in exec_results.items():
-            if key in ["skipped", "email_sent"]:
-                continue  # Skip metadata fields
-                
-            # Extract agent type from key
-            agent_type = key.split('_')[0]
-            icon_map = {
-                "gmail": "📧",
-                "github": "🐙",
-                "dsa": "🧠",
-                "leetcode": "💻",
-                "calendar": "📅",
-                "summary": "📝"
-            }
-            icon = icon_map.get(agent_type, "📊")
-            
-            with st.expander(f"{icon} {agent_type.upper()} Results", expanded=True):
-                if isinstance(value, dict):
-                    # Display content if available
-                    if value.get("content"):
-                        st.markdown("**Response:**")
-                        st.text_area(
-                            "Content",
-                            value["content"],
-                            height=200,
-                            disabled=True,
-                            label_visibility="collapsed"
-                        )
-                    
-                    # Display data if available (for structured results)
-                    if value.get("data"):
-                        st.markdown("**Data:**")
-                        if isinstance(value["data"], (list, dict)):
-                            st.json(value["data"])
-                        else:
-                            st.text(str(value["data"]))
-                    
-                    # Display success/error status
-                    if "success" in value:
-                        status_icon = "✅" if value["success"] else "❌"
-                        st.write(f"**Status:** {status_icon} {'Success' if value['success'] else 'Failed'}")
-                    
-                    # Display error if present
-                    if value.get("error"):
-                        st.error(f"**Error:** {value['error']}")
-                    
-                    # Display any other metadata
-                    metadata_keys = [k for k in value.keys() if k not in ["content", "data", "success", "error"]]
-                    if metadata_keys:
-                        st.markdown("**Additional Info:**")
-                        metadata_dict = {k: value[k] for k in metadata_keys}
-                        st.json(metadata_dict)
-                else:
-                    st.write(value)
+            if isinstance(value, dict) and value.get("content"):
+                st.markdown(f"#### {key.replace('_', ' ').title()}")
+                st.text_area("Content:", value["content"], height=200, disabled=True)
     
-    # Show logs if available
+    # Show logs
     if "logs" in result and result["logs"]:
         st.markdown("### 📝 Execution Logs")
         
-        with st.expander("View detailed logs", expanded=False):
-            for i, log in enumerate(result["logs"], 1):
-                st.markdown(f"**Log {i}:**")
+        with st.expander("View detailed logs"):
+            for log in result["logs"]:
                 st.json(log)
-                st.markdown("---")
-
-
-def display_performance_metrics(metrics: Dict[str, Any]):
-    """Display performance metrics in a visually appealing way"""
-    
-    st.markdown("### ⚡ Performance Metrics")
-    
-    # Top-level metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        duration_s = metrics.get("total_duration_seconds", 0)
-        st.metric("Total Duration", f"{duration_s:.2f}s")
-    
-    with col2:
-        total_ops = metrics.get("total_operations", 0)
-        st.metric("Total Operations", total_ops)
-    
-    with col3:
-        success_ops = metrics.get("successful_operations", 0)
-        st.metric("Successful", success_ops, delta_color="normal")
-    
-    with col4:
-        failed_ops = metrics.get("failed_operations", 0)
-        delta_color = "inverse" if failed_ops > 0 else "off"
-        st.metric("Failed", failed_ops, delta_color=delta_color)
-    
-    # Operation breakdown
-    operation_stats = metrics.get("operation_stats", {})
-    
-    if operation_stats:
-        st.markdown("#### 🔍 Operation Breakdown")
-        
-        # Create a DataFrame for better visualization
-        import pandas as pd
-        
-        rows = []
-        for op_name, stats in operation_stats.items():
-            rows.append({
-                "Operation": op_name.split('.')[-1],  # Get just the function name
-                "Count": stats.get("count", 0),
-                "Avg Duration (s)": f"{stats.get('avg_duration', 0):.2f}",
-                "Total Duration (s)": f"{stats.get('total_duration', 0):.2f}",
-                "Success Rate": f"{stats.get('success_rate', 0):.1f}%"
-            })
-        
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        
-        # Detailed metrics in expander
-        with st.expander("📈 Detailed Performance Data", expanded=False):
-            detailed_metrics = metrics.get("detailed_metrics", [])
-            
-            if detailed_metrics:
-                for i, metric in enumerate(detailed_metrics, 1):
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    
-                    with col1:
-                        st.write(f"**{i}. {metric.get('operation', 'Unknown')}**")
-                    
-                    with col2:
-                        st.write(f"⏱️ {metric.get('duration_seconds', 0):.2f}s")
-                    
-                    with col3:
-                        success_icon = "✅" if metric.get('success') else "❌"
-                        st.write(success_icon)
-                    
-                    if metric.get('error'):
-                        st.error(f"Error: {metric['error']}")
-                    
-                    if i < len(detailed_metrics):
-                        st.markdown("---")
 
 def task_history_interface():
     """Display task execution history"""

@@ -1,0 +1,321 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AutoTasker AI - Serverless Multi-Agent Workflow Orchestration System
+
+Parameters:
+  OpenRouterApiKey:
+    Type: String
+    NoEcho: true
+    Description: OpenRouter API Key for LLM access
+    Default: ''
+  
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API Key (alternative to OpenRouter)
+    Default: ''
+  
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub Personal Access Token for repository access
+    Default: ''
+  
+  GmailAddress:
+    Type: String
+    Description: Gmail address for email operations
+    Default: 'hemeshcse2005@gmail.com'
+  
+  Environment:
+    Type: String
+    Description: Deployment environment
+    Default: production
+    AllowedValues:
+      - development
+      - staging
+      - production
+
+Globals:
+  Function:
+    Timeout: 900
+    MemorySize: 1024
+    Runtime: python3.11
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        GMAIL_ADDRESS: !Ref GmailAddress
+
+Resources:
+  # Lambda Function for AutoTasker AI
+  AutoTaskerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'autotasker-ai-${Environment}'
+      CodeUri: .
+      Handler: aws/lambda_handler.lambda_handler
+      Description: AutoTasker AI multi-agent workflow orchestration
+      Timeout: 900
+      MemorySize: 1024
+    Metadata:
+      BuildMethod: python3.11
+      Environment:
+        Variables:
+          OPENROUTER_API_KEY: !Ref OpenRouterApiKey
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          GITHUB_TOKEN: !Ref GitHubToken
+          S3_BUCKET: !Ref AutoTaskerS3Bucket
+          DYNAMODB_TABLE: !Ref AutoTaskerMemoryTable
+          GMAIL_CREDENTIALS_SECRET: autotasker/gmail-credentials
+          GMAIL_TOKEN_SECRET: autotasker/gmail-token
+          MAX_RETRIES: '3'
+          RECURSION_LIMIT: '50'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AutoTaskerMemoryTable
+        - S3CrudPolicy:
+            BucketName: !Ref AutoTaskerS3Bucket
+        - SESCrudPolicy:
+            IdentityName: "*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource:
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:autotasker/*'
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+      Events:
+        ApiGateway:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AutoTaskerApi
+            Path: /execute
+            Method: post
+        ScheduledExecution:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 9 * * ? *)
+            Description: Daily execution at 9 AM UTC
+            Enabled: true
+            Input: |
+              {
+                "scheduled": true,
+                "prompt": "Execute daily scheduled tasks"
+              }
+
+  # API Gateway
+  AutoTaskerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'autotasker-api-${Environment}'
+      StageName: prod
+      Description: AutoTasker AI REST API
+      Cors:
+        AllowMethods: "'POST, GET, OPTIONS'"
+        AllowHeaders: "'Content-Type, Authorization'"
+        AllowOrigin: "'*'"
+      Auth:
+        ApiKeyRequired: false
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+
+  # DynamoDB Table for Memory Management
+  AutoTaskerMemoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'autotasker-memory-${Environment}'
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: task_signature
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: task_signature
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: TimestampIndex
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: AutoTasker-AI
+        - Key: Environment
+          Value: !Ref Environment
+
+  # S3 Bucket for Results and Logs
+  AutoTaskerS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'autotasker-ai-storage-${AWS::AccountId}-${Environment}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+            Prefix: logs/
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: AutoTasker-AI
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudWatch Log Group
+  AutoTaskerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/autotasker-ai-${Environment}'
+      RetentionInDays: 30
+
+  # CloudWatch Alarms
+  AutoTaskerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'AutoTasker-Errors-${Environment}'
+      AlarmDescription: Alert when Lambda function has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AutoTaskerFunction
+
+  AutoTaskerThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'AutoTasker-Throttles-${Environment}'
+      AlarmDescription: Alert when Lambda function is throttled
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AutoTaskerFunction
+
+  # Lambda Permission for EventBridge
+  AutoTaskerEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AutoTaskerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyScheduleRule.Arn
+
+  # EventBridge Rule for Scheduled Tasks
+  DailyScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'autotasker-daily-schedule-${Environment}'
+      Description: Daily execution for AutoTasker AI at 9 AM UTC
+      ScheduleExpression: cron(0 9 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AutoTaskerFunction.Arn
+          Id: AutoTaskerDailyTarget
+          Input: |
+            {
+              "scheduled": true,
+              "prompt": "Execute daily scheduled tasks - send LeetCode questions"
+            }
+
+Outputs:
+  ApiGatewayUrl:
+    Description: API Gateway endpoint URL for production stage
+    Value: !Sub 'https://${AutoTaskerApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiUrl'
+  
+  ApiGatewayId:
+    Description: API Gateway ID
+    Value: !Ref AutoTaskerApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiId'
+  
+  LambdaFunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt AutoTaskerFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionArn'
+  
+  LambdaFunctionName:
+    Description: Lambda Function Name
+    Value: !Ref AutoTaskerFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionName'
+  
+  S3BucketName:
+    Description: S3 Bucket for storage
+    Value: !Ref AutoTaskerS3Bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+  
+  DynamoDBTableName:
+    Description: DynamoDB Table for memory management
+    Value: !Ref AutoTaskerMemoryTable
+    Export:
+      Name: !Sub '${AWS::StackName}-TableName'
+  
+  DynamoDBTableArn:
+    Description: DynamoDB Table ARN
+    Value: !GetAtt AutoTaskerMemoryTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TableArn'
+  
+  LogGroupName:
+    Description: CloudWatch Log Group name
+    Value: !Ref AutoTaskerLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroup'
+  
+  ScheduleRuleArn:
+    Description: EventBridge Schedule Rule ARN
+    Value: !GetAtt DailyScheduleRule.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ScheduleArn'

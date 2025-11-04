@@ -217,9 +217,13 @@ class TaskScheduler:
             return ScheduleExpressionBuilder.daily_at_time(hour, minute)
             
         elif schedule_type == 'weekly':
-            # schedule_value: "MON:09:00"
-            day, time = schedule_value.split(':')
-            hour, minute = map(int, time.split(':'))
+            # schedule_value: "MON:09:00" (day:hour:minute)
+            parts = schedule_value.split(':')
+            if len(parts) == 3:
+                day, hour_str, minute_str = parts
+                hour, minute = int(hour_str), int(minute_str)
+            else:
+                raise ValueError(f"Invalid weekly schedule format: {schedule_value}. Expected DAY:HH:MM")
             return ScheduleExpressionBuilder.weekly_on_day(day, hour, minute)
             
         elif schedule_type == 'monthly':
@@ -249,9 +253,16 @@ class TaskScheduler:
             return CronTrigger(hour=hour, minute=minute)
             
         elif schedule_type == 'weekly':
-            # schedule_value should be "MON:09:00" format
-            day, time = schedule_value.split(':')
-            hour, minute = map(int, time.split(':'))
+            # schedule_value should be "MON:09:00" format (day:hour:minute)
+            parts = schedule_value.split(':')
+            if len(parts) == 3:
+                day, hour, minute = parts
+            else:
+                # Fallback for unexpected format
+                day = parts[0]
+                hour, minute = parts[1].split(':') if len(parts) == 2 else (9, 0)
+            
+            hour, minute = int(hour), int(minute)
             day_map = {
                 'MON': 0, 'TUE': 1, 'WED': 2, 'THU': 3,
                 'FRI': 4, 'SAT': 5, 'SUN': 6
@@ -467,11 +478,34 @@ class ScheduleParser:
         - "every Monday at 2PM" -> {'type': 'weekly', 'value': 'MON:14:00'}
         - "every 30 minutes" -> {'type': 'interval', 'value': '1800'}
         - "every 5 minutes, 3 times" -> {'type': 'limited_interval', 'value': '300:3'}
+        - "now 3 times with 5 min gap" -> {'type': 'limited_interval', 'value': '300:3', 'immediate': True}
+        - "today at 11:47pm" -> {'type': 'once', 'value': '23:47'}
         """
         schedule_text = schedule_text.lower().strip()
         
         # Limited repetition patterns (enhanced!)
         import re
+        
+        # Pattern: "now X times with Y min/hour gap"
+        immediate_pattern = re.search(r'now\s+(\d+)\s*times?\s+with\s+(\d+)\s+(minute|hour|min)s?\s+gap', schedule_text)
+        if immediate_pattern:
+            repetitions = int(immediate_pattern.group(1))
+            interval_number = int(immediate_pattern.group(2))
+            interval_unit = immediate_pattern.group(3)
+            
+            if 'hour' in interval_unit:
+                interval_seconds = interval_number * 3600
+            else:  # minute or min
+                interval_seconds = interval_number * 60
+            
+            return {'type': 'limited_interval', 'value': f"{interval_seconds}:{repetitions}", 'immediate': True}
+        
+        # Pattern: "send now X times"  (assume 5 min gap by default)
+        immediate_pattern2 = re.search(r'(?:send\s+)?now\s+(\d+)\s*times?', schedule_text)
+        if immediate_pattern2:
+            repetitions = int(immediate_pattern2.group(1))
+            default_gap = 300  # 5 minutes
+            return {'type': 'limited_interval', 'value': f"{default_gap}:{repetitions}", 'immediate': True}
         
         # Pattern 1: "every X minutes, Y times"
         limited_pattern1 = re.search(r'every\s+(\d+)\s+(minute|hour)s?,?\s*(\d+)\s*times?', schedule_text)
@@ -499,8 +533,39 @@ class ScheduleParser:
                     
                 return {'type': 'limited_interval', 'value': f"{interval_seconds}:{repetitions}"}
         
-        # Daily patterns
-        if 'daily' in schedule_text or 'every day' in schedule_text:
+        # Specific time patterns (today/tonight at HH:MM OR just at HH:MM)
+        # Pattern 1: "today/tonight at HH:MM"
+        specific_time_pattern = re.search(r'(?:today|tonight)\s+at\s+(\d{1,2}):?(\d{2})?\s*(am|pm)?', schedule_text)
+        if specific_time_pattern:
+            hour = int(specific_time_pattern.group(1))
+            minute = int(specific_time_pattern.group(2)) if specific_time_pattern.group(2) else 0
+            ampm = specific_time_pattern.group(3)
+            
+            if ampm:
+                if ampm == 'pm' and hour != 12:
+                    hour += 12
+                elif ampm == 'am' and hour == 12:
+                    hour = 0
+            
+            return {'type': 'once', 'value': f"{hour:02d}:{minute:02d}"}
+        
+        # Pattern 2: Just "at HH:MM" (without today/tonight)
+        general_time_pattern = re.search(r'\bat\s+(\d{1,2}):(\d{2})\s*(am|pm)?', schedule_text)
+        if general_time_pattern:
+            hour = int(general_time_pattern.group(1))
+            minute = int(general_time_pattern.group(2))
+            ampm = general_time_pattern.group(3)
+            
+            if ampm:
+                if ampm == 'pm' and hour != 12:
+                    hour += 12
+                elif ampm == 'am' and hour == 12:
+                    hour = 0
+            
+            return {'type': 'once', 'value': f"{hour:02d}:{minute:02d}"}
+        
+        # Daily patterns - but NOT if it's "yesterday", "today", etc. without schedule words
+        if ('daily' in schedule_text or 'every day' in schedule_text) and 'yesterday' not in schedule_text:
             time_match = ScheduleParser._extract_time(schedule_text)
             if time_match:
                 return {'type': 'daily', 'value': time_match}
@@ -526,28 +591,28 @@ class ScheduleParser:
                 elif 'hour' in schedule_text:
                     return {'type': 'interval', 'value': str(number * 3600)}
         
-        # Default to daily at 9AM if can't parse
-        return {'type': 'daily', 'value': '09:00'}
+        # If no schedule pattern detected, return "once" for immediate execution
+        return {'type': 'once', 'value': 'immediate'}
     
     @staticmethod
     def _extract_time(text: str) -> Optional[str]:
-        """Extract time from text (e.g., '9AM' -> '09:00')"""
+        """Extract time from text (e.g., '9AM' -> '09:00', '11:47pm' -> '23:47')"""
         import re
         
-        # Match patterns like "9AM", "2:30PM", "14:00"
+        # Match patterns like "9AM", "2:30PM", "14:00", "11:47pm"
         time_patterns = [
-            r'(\d{1,2}):?(\d{2})?\s*(am|pm)',
-            r'(\d{1,2}):(\d{2})',
-            r'(\d{1,2})\s*(am|pm)'
+            r'(\d{1,2}):(\d{2})\s*(am|pm)',  # 11:47pm or 2:30 PM
+            r'(\d{1,2}):(\d{2})',            # 14:00 or 9:30
+            r'(\d{1,2})\s*(am|pm)'           # 9am or 2PM
         ]
         
         for pattern in time_patterns:
             match = re.search(pattern, text.lower())
             if match:
                 hour = int(match.group(1))
-                minute = int(match.group(2)) if match.group(2) else 0
+                minute = int(match.group(2)) if len(match.groups()) >= 2 and match.group(2) and match.group(2).isdigit() else 0
                 
-                # Handle AM/PM
+                # Handle AM/PM if present
                 if len(match.groups()) >= 3 and match.group(3):
                     ampm = match.group(3)
                     if ampm == 'pm' and hour != 12:
@@ -555,7 +620,9 @@ class ScheduleParser:
                     elif ampm == 'am' and hour == 12:
                         hour = 0
                 
-                return f"{hour:02d}:{minute:02d}"
+                # Validate hour and minute
+                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                    return f"{hour:02d}:{minute:02d}"
         
         return None
 

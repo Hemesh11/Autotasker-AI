@@ -1,0 +1,281 @@
+# AutoTasker AI - AWS Deployment Checklist
+
+## Pre-Deployment Setup (One-Time)
+
+### 1. AWS Account Setup
+- [ ] AWS account created
+- [ ] IAM user created (`autotasker-ai-user`)
+- [ ] IAM policies attached (Lambda, API Gateway, DynamoDB, S3, SES, Secrets Manager)
+- [ ] Access keys downloaded and saved securely
+- [ ] AWS CLI installed
+- [ ] AWS CLI configured (`aws configure`)
+- [ ] AWS credentials tested (`aws sts get-caller-identity`)
+
+### 2. AWS Services Configuration
+- [ ] S3 bucket created: `autotasker-ai-storage-[unique-id]`
+- [ ] DynamoDB table created: `autotasker-memory`
+- [ ] SES email verified: `hemeshcse2005@gmail.com`
+- [ ] Gmail credentials uploaded to Secrets Manager: `autotasker/gmail-credentials`
+- [ ] Gmail token uploaded to Secrets Manager: `autotasker/gmail-token`
+
+### 3. Local Environment
+- [ ] Conda environment active: `conda activate autotasker`
+- [ ] All dependencies installed: `pip install -r requirements.txt`
+- [ ] Production test passed: `python test_production_ready.py`
+- [ ] Gmail OAuth completed locally
+- [ ] Gmail token generated: `google_auth/gmail_token.json`
+
+### 4. API Keys and Secrets
+- [ ] OPENROUTER_API_KEY or OPENAI_API_KEY configured
+- [ ] GITHUB_TOKEN configured (optional)
+- [ ] All secrets stored in AWS Secrets Manager
+- [ ] Environment variables updated in `.env`
+
+## Deployment Steps
+
+### 5. Install AWS SAM CLI
+```cmd
+# Download from: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html
+
+# Verify installation
+sam --version
+```
+
+### 6. Build the Application
+```cmd
+cd c:\Users\hemes\Desktop\sem 6 project\IMPLEMENTATION
+conda activate autotasker
+sam build
+```
+
+**Expected output:**
+```
+Build Succeeded
+
+Built Artifacts  : .aws-sam/build
+Built Template   : .aws-sam/build/template.yaml
+```
+
+### 7. Deploy to AWS
+```cmd
+sam deploy --guided
+```
+
+**Prompts and Responses:**
+```
+Stack Name: autotasker-ai-stack
+AWS Region: eu-north-1
+Parameter OpenRouterApiKey: [Your API Key]
+Parameter OpenAIApiKey: [Leave empty if using OpenRouter]
+Parameter GitHubToken: [Your GitHub Token or leave empty]
+Parameter GmailAddress: hemeshcse2005@gmail.com
+Parameter Environment: production
+Confirm changes before deploy: y
+Allow SAM CLI IAM role creation: y
+Disable rollback: n
+AutoTaskerFunction may not have authorization defined: y
+Save arguments to configuration file: y
+SAM configuration file: samconfig.toml
+SAM configuration environment: default
+```
+
+### 8. Post-Deployment Verification
+```cmd
+# Get API Gateway URL
+sam list endpoints --output json
+
+# Test the deployed function
+curl -X POST https://[your-api-gateway-url]/prod/execute \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\": \"test deployment\"}"
+```
+
+### 9. Verify AWS Resources
+**Check in AWS Console:**
+- [ ] Lambda function: `autotasker-ai-production`
+- [ ] API Gateway: `autotasker-api-production`
+- [ ] DynamoDB table: `autotasker-memory-production`
+- [ ] S3 bucket: `autotasker-ai-storage-[account-id]-production`
+- [ ] CloudWatch Log Group: `/aws/lambda/autotasker-ai-production`
+- [ ] EventBridge Rule: `autotasker-daily-schedule-production`
+
+### 10. Test Scheduled Execution
+```cmd
+# Manually trigger the EventBridge rule
+aws events put-events --entries file://test-event.json
+
+# Or wait for scheduled execution (9 AM UTC daily)
+# Check logs in CloudWatch
+```
+
+## Monitoring and Maintenance
+
+### 11. CloudWatch Monitoring
+- [ ] Check Lambda metrics (invocations, errors, duration)
+- [ ] Review CloudWatch Logs for errors
+- [ ] Set up CloudWatch Alarms (already configured in template)
+- [ ] Monitor DynamoDB metrics
+- [ ] Track S3 storage usage
+
+### 12. Cost Monitoring
+- [ ] Enable AWS Cost Explorer
+- [ ] Set billing alerts
+- [ ] Review monthly costs
+- [ ] Optimize resource usage
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+**1. Build Fails**
+```cmd
+# Check Python version
+python --version  # Should be 3.11+
+
+# Reinstall dependencies
+pip install -r requirements.txt
+
+# Clear build cache
+sam build --cached false
+```
+
+**2. Deployment Fails**
+```cmd
+# Check AWS credentials
+aws sts get-caller-identity
+
+# Verify IAM permissions
+aws iam get-user
+
+# Check stack events
+aws cloudformation describe-stack-events --stack-name autotasker-ai-stack
+```
+
+**3. Lambda Errors**
+```cmd
+# View logs
+sam logs -n AutoTaskerFunction --stack-name autotasker-ai-stack --tail
+
+# Or in AWS Console
+# CloudWatch → Log groups → /aws/lambda/autotasker-ai-production
+```
+
+**4. API Gateway 502 Error**
+- Check Lambda function logs
+- Verify Lambda timeout (should be 900s)
+- Check IAM permissions
+
+**5. Secrets Manager Access Denied**
+- Verify secrets exist: `aws secretsmanager list-secrets`
+- Check Lambda execution role has SecretsManager permissions
+- Ensure secret names match configuration
+
+## Update and Redeploy
+
+### Making Changes
+```cmd
+# 1. Make code changes
+# 2. Test locally
+python test_production_ready.py
+
+# 3. Build
+sam build
+
+# 4. Deploy (no --guided flag needed)
+sam deploy
+
+# 5. Verify deployment
+curl -X POST https://[api-url]/prod/execute -d "{\"prompt\": \"test\"}"
+```
+
+### Rollback
+```cmd
+# View stack history
+aws cloudformation describe-stack-events --stack-name autotasker-ai-stack
+
+# Rollback to previous version
+aws cloudformation cancel-update-stack --stack-name autotasker-ai-stack
+```
+
+## Cleanup (When Needed)
+
+### Delete All Resources
+```cmd
+# Delete CloudFormation stack
+sam delete --stack-name autotasker-ai-stack
+
+# Manually delete:
+# - S3 bucket (must be empty first)
+# - Secrets Manager secrets
+# - CloudWatch Log Groups
+```
+
+## Security Checklist
+
+- [ ] API keys stored in Secrets Manager (not environment variables)
+- [ ] S3 bucket has encryption enabled
+- [ ] DynamoDB has point-in-time recovery enabled
+- [ ] CloudWatch Logs retention set (30 days)
+- [ ] IAM roles follow principle of least privilege
+- [ ] API Gateway has throttling configured
+- [ ] Lambda function has appropriate timeout and memory
+
+## Production Ready Checklist
+
+- [ ] All tests passing locally
+- [ ] Gmail OAuth token uploaded to Secrets Manager
+- [ ] Secrets Manager configured correctly
+- [ ] API keys validated
+- [ ] Lambda function deployed successfully
+- [ ] API Gateway endpoint responding
+- [ ] EventBridge schedule enabled
+- [ ] CloudWatch monitoring active
+- [ ] Cost alerts configured
+- [ ] Documentation updated
+
+## Quick Reference Commands
+
+```cmd
+# Build
+sam build
+
+# Deploy (first time)
+sam deploy --guided
+
+# Deploy (subsequent)
+sam deploy
+
+# View logs
+sam logs -n AutoTaskerFunction --tail
+
+# List endpoints
+sam list endpoints
+
+# Test locally
+sam local invoke AutoTaskerFunction -e events/test-event.json
+
+# Delete stack
+sam delete
+
+# Validate template
+sam validate
+
+# Package for deployment
+sam package --output-template-file packaged.yaml
+
+# Get stack info
+aws cloudformation describe-stacks --stack-name autotasker-ai-stack
+```
+
+## Support Resources
+
+- AWS SAM Documentation: https://docs.aws.amazon.com/serverless-application-model/
+- AWS Lambda Troubleshooting: https://docs.aws.amazon.com/lambda/latest/dg/troubleshooting.html
+- AWS CloudWatch Logs: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/
+- AutoTasker AI Repository: https://github.com/Hemesh11/Autotasker-AI
+
+---
+
+**Status:** ✅ Ready for Deployment
+
+**Last Updated:** November 3, 2025

@@ -1,20 +1,35 @@
 """
-AWS Lambda Handler for AutoTasker AI
-Serverless execution of scheduled tasks
+AWS Lambda handler for AutoTasker AI
+Serverless deployment wrapper for the LangGraph workflow orchestrator
 """
 
 import json
-import boto3
 import os
+import logging
+from typing import Dict, Any, Tuple
+import boto3
+from botocore.exceptions import ClientError
 from datetime import datetime
-from typing import Dict, Any
+
+# Set up logging for Lambda
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Add Lambda layer path
+import sys
+sys.path.append('/opt/python')
 
 # Import AutoTasker components
-import sys
-sys.path.append('/opt/python')  # Lambda layer path
+try:
+    from backend.langgraph_runner import AutoTaskerRunner
+    from backend.utils import load_config
+except ImportError as e:
+    logger.error(f"Failed to import AutoTasker components: {e}")
+    raise
 
-from backend.langgraph_runner import AutoTaskerRunner
-from backend.utils import load_config
+# AWS clients
+secrets_client = boto3.client('secretsmanager')
+eventbridge_client = boto3.client('events')
 
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:

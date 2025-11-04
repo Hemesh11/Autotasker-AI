@@ -31,6 +31,7 @@ from agents.retry_agent import RetryAgent
 from agents.memory_agent import MemoryAgent
 from agents.calendar_agent import CalendarAgent
 from backend.utils import load_config, setup_logging
+from backend.performance_monitor import PerformanceMonitor, get_global_monitor
 
 
 class WorkflowState(TypedDict):
@@ -45,6 +46,7 @@ class WorkflowState(TypedDict):
     logs: List[Dict[str, Any]]
     memory_check: Dict[str, Any]
     summarization_completed: bool
+    performance_metrics: Dict[str, Any]  # NEW: Performance tracking
 
 
 class AutoTaskerRunner:
@@ -56,6 +58,9 @@ class AutoTaskerRunner:
         else:
             self.config = load_config(config_path)
         self.logger = setup_logging(self.config.get('logging', {}))
+        
+        # Initialize performance monitor
+        self.performance_monitor = PerformanceMonitor()
         
         # Initialize agents
         self.planner = PlannerAgent(self.config)
@@ -148,8 +153,10 @@ class AutoTaskerRunner:
     
     def planner_node(self, state: WorkflowState) -> WorkflowState:
         """Convert natural language prompt to structured task plan"""
+        self.performance_monitor.start_operation("planner_agent")
         try:
             if state.get("memory_check", {}).get("should_skip", False):
+                self.performance_monitor.end_operation(success=True)
                 return state
                 
             task_plan = self.planner.create_task_plan(state["original_prompt"])
@@ -157,10 +164,12 @@ class AutoTaskerRunner:
             state["current_step"] = 0
             
             self.logger.info(f"Generated task plan: {task_plan}")
+            self.performance_monitor.end_operation(success=True)
             
         except Exception as e:
             self.logger.error(f"Planning failed: {e}")
             state["errors"].append(f"Planning error: {str(e)}")
+            self.performance_monitor.end_operation(success=False, error=str(e))
             
         return state
     
@@ -194,6 +203,7 @@ class AutoTaskerRunner:
     
     def gmail_task_node(self, state: WorkflowState) -> WorkflowState:
         """Execute Gmail-related tasks"""
+        self.performance_monitor.start_operation("gmail_agent")
         try:
             current_task = state["task_plan"]["tasks"][state["current_step"]]
             result = self.gmail_agent.execute_task(current_task)
@@ -202,34 +212,109 @@ class AutoTaskerRunner:
             state["current_step"] += 1
             
             self.logger.info(f"Gmail task completed: {result}")
+            self.performance_monitor.end_operation(success=True)
             
         except Exception as e:
             self.logger.error(f"Gmail task failed: {e}")
             state["errors"].append(f"Gmail task error: {str(e)}")
             state["retry_count"] = state.get("retry_count", 0) + 1
+            self.performance_monitor.end_operation(success=False, error=str(e))
             
         return state
     
     def github_task_node(self, state: WorkflowState) -> WorkflowState:
         """Execute GitHub-related tasks"""
+        self.performance_monitor.start_operation("github_agent")
         try:
             current_task = state["task_plan"]["tasks"][state["current_step"]]
+            
+            # CRITICAL FIX: Normalize and ensure repository parameter is set
+            params = current_task.get("parameters", {})
+            operation = params.get("operation", "get_commits")
+
+            # SPECIAL CASE: get_user_repos needs "username" parameter, NOT "repository"
+            if operation == "get_user_repos":
+                # Ensure username exists
+                if "username" not in params:
+                    # Try to get from environment
+                    env_owner = os.getenv("GITHUB_DEFAULT_OWNER")
+                    if env_owner and env_owner != "your-username":
+                        params["username"] = env_owner
+                        self.logger.info(f"Added username '{env_owner}' for get_user_repos")
+                
+                # Remove repository if it exists (shouldn't be there for get_user_repos)
+                if "repository" in params:
+                    params.pop("repository")
+                    self.logger.info("Removed 'repository' parameter for get_user_repos operation")
+                
+                # Skip all the repository normalization below
+                current_task["parameters"] = params
+                result = self.github_agent.execute_task(current_task)
+                state["execution_results"][f"github_{state['current_step']}"] = result
+                state["current_step"] += 1
+                self.logger.info(f"GitHub task completed: {result}")
+                self.performance_monitor.end_operation(success=True)
+                return state
+
+            # FOR OTHER OPERATIONS: Normalize repository parameter
+            # Common variants that users/LLM might produce
+            username_keys = [k for k in ("username", "user", "owner") if k in params]
+
+            # If planner provided separate owner+repo fields, combine them
+            if "owner" in params and ("repo_name" in params or "name" in params or "repository_name" in params):
+                owner = params.get("owner")
+                repo_part = params.get("repo_name") or params.get("name") or params.get("repository_name")
+                params["repository"] = f"{owner}/{repo_part}"
+                self.logger.info(f"Combined owner+repo fields into repository: {params['repository']}")
+
+            # If a username/user/owner was provided without repo, set to username/* to trigger auto-detect
+            elif username_keys and "repository" not in params:
+                key = username_keys[0]
+                username = params.pop(key)
+                # Use wildcard pattern so GitHub agent will pick the most recent repo for that user
+                params["repository"] = f"{username}/*"
+                self.logger.info(f"Converted '{key}'='{username}' to repository pattern '{params['repository']}' for auto-detect")
+
+            # If repository exists but looks like a single name (e.g. 'Hemesh11'), treat as username
+            elif "repository" in params and params.get("repository") and "/" not in str(params.get("repository")):
+                single = params.get("repository")
+                params["repository"] = f"{single}/*"
+                self.logger.info(f"Normalized single-value repository '{single}' to pattern '{params['repository']}'")
+
+            # If repository still missing, set empty to trigger authenticated-user or env fallback
+            if "repository" not in params or not params.get("repository") or params.get("repository") == "user/repo":
+                params["repository"] = ""
+                self.logger.info("No repository specified (after normalization) - will attempt auto-detect from authenticated user or environment")
+
+            # Try environment defaults next
+            if not params.get("repository"):
+                env_owner = os.getenv("GITHUB_DEFAULT_OWNER")
+                env_repo = os.getenv("GITHUB_DEFAULT_REPO")
+                if env_owner and env_repo and env_owner != "your-username":
+                    params["repository"] = f"{env_owner}/{env_repo}"
+                    self.logger.info(f"Using repository from environment: {params['repository']}")
+            
+            current_task["parameters"] = params
+            
             result = self.github_agent.execute_task(current_task)
             
             state["execution_results"][f"github_{state['current_step']}"] = result
             state["current_step"] += 1
             
             self.logger.info(f"GitHub task completed: {result}")
+            self.performance_monitor.end_operation(success=True)
             
         except Exception as e:
             self.logger.error(f"GitHub task failed: {e}")
             state["errors"].append(f"GitHub task error: {str(e)}")
             state["retry_count"] = state.get("retry_count", 0) + 1
+            self.performance_monitor.end_operation(success=False, error=str(e))
             
         return state
     
     def dsa_task_node(self, state: WorkflowState) -> WorkflowState:
         """Execute DSA generation tasks"""
+        self.performance_monitor.start_operation("dsa_agent")
         try:
             current_task = state["task_plan"]["tasks"][state["current_step"]]
             result = self.dsa_agent.execute_task(current_task)
@@ -238,16 +323,19 @@ class AutoTaskerRunner:
             state["current_step"] += 1
             
             self.logger.info(f"DSA task completed: {result}")
+            self.performance_monitor.end_operation(success=True)
             
         except Exception as e:
             self.logger.error(f"DSA task failed: {e}")
             state["errors"].append(f"DSA task error: {str(e)}")
             state["retry_count"] = state.get("retry_count", 0) + 1
+            self.performance_monitor.end_operation(success=False, error=str(e))
             
         return state
     
     def leetcode_task_node(self, state: WorkflowState) -> WorkflowState:
         """Execute LeetCode-related tasks"""
+        self.performance_monitor.start_operation("leetcode_agent")
         try:
             current_task = state["task_plan"]["tasks"][state["current_step"]]
             result = self.leetcode_agent.execute_task(current_task)
@@ -256,16 +344,19 @@ class AutoTaskerRunner:
             state["current_step"] += 1
             
             self.logger.info(f"LeetCode task completed: {result}")
+            self.performance_monitor.end_operation(success=True)
             
         except Exception as e:
             self.logger.error(f"LeetCode task failed: {e}")
             state["errors"].append(f"LeetCode task error: {str(e)}")
             state["retry_count"] = state.get("retry_count", 0) + 1
+            self.performance_monitor.end_operation(success=False, error=str(e))
             
         return state
     
     def calendar_task_node(self, state: WorkflowState) -> WorkflowState:
         """Execute Calendar-related tasks"""
+        self.performance_monitor.start_operation("calendar_agent")
         try:
             current_task = state["task_plan"]["tasks"][state["current_step"]]
             result = self.calendar_agent.execute_task(current_task)
@@ -274,11 +365,13 @@ class AutoTaskerRunner:
             state["current_step"] += 1
             
             self.logger.info(f"Calendar task completed: {result}")
+            self.performance_monitor.end_operation(success=True)
             
         except Exception as e:
             self.logger.error(f"Calendar task failed: {e}")
             state["errors"].append(f"Calendar task error: {str(e)}")
             state["retry_count"] = state.get("retry_count", 0) + 1
+            self.performance_monitor.end_operation(success=False, error=str(e))
             
         return state
     
@@ -390,9 +483,12 @@ class AutoTaskerRunner:
             if isinstance(result, dict):
                 body_parts.append(f"=== {key.upper()} ===\n")
                 if "content" in result:
-                    body_parts.append(f"{result['content']}\n\n")
-                elif "data" in result:
-                    body_parts.append(f"{json.dumps(result['data'], indent=2)}\n\n")
+                    body_parts.append(f"{result['content']}\n")
+                if "data" in result:
+                    # Include detailed data if available
+                    body_parts.append("------------------\n")
+                    body_parts.append(f"{json.dumps(result['data'], indent=2)}\n")
+                body_parts.append("\n")
         
         # Add errors if any
         if state["errors"]:
@@ -407,6 +503,9 @@ class AutoTaskerRunner:
     
     def run_workflow(self, prompt: str) -> Dict[str, Any]:
         """Run the complete workflow for a given prompt"""
+        # Start performance tracking
+        self.performance_monitor.start_workflow()
+        
         initial_state = WorkflowState(
             original_prompt=prompt,
             task_plan={},
@@ -417,7 +516,8 @@ class AutoTaskerRunner:
             email_content="",
             logs=[],
             memory_check={},
-            summarization_completed=False
+            summarization_completed=False,
+            performance_metrics={}
         )
         
         self.logger.info(f"Starting workflow for prompt: {prompt}")
@@ -426,14 +526,26 @@ class AutoTaskerRunner:
             # Set recursion limit for safety
             recursion_limit = self.config.get("app", {}).get("recursion_limit", 50)
             final_state = self.workflow.invoke(initial_state, config={"recursion_limit": recursion_limit})
+            
+            # End performance tracking
+            self.performance_monitor.end_workflow()
+            
+            # Add performance metrics to final state
+            final_state["performance_metrics"] = self.performance_monitor.get_summary()
+            
             self.logger.info(f"Workflow completed successfully")
+            self.logger.info(f"Performance: {self.performance_monitor.get_formatted_report()}")
+            
             return final_state
             
         except Exception as e:
             self.logger.error(f"Workflow execution failed: {e}")
+            self.performance_monitor.end_workflow()
+            
             return {
                 "error": str(e),
-                "state": initial_state
+                "state": initial_state,
+                "performance_metrics": self.performance_monitor.get_summary()
             }
 
 

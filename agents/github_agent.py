@@ -3,6 +3,7 @@ GitHub Agent: Handles GitHub API operations for repository data, commits, and is
 """
 
 import logging
+import os
 import requests
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
@@ -18,8 +19,8 @@ class GitHubAgent:
         self.config = config
         self.logger = logging.getLogger(f"{__name__}.GitHubAgent")
         
-        # GitHub configuration
-        self.github_token = config.get("github", {}).get("token") or config.get("github_token")
+        # GitHub configuration - check environment variable first, then config
+        self.github_token = os.getenv("GITHUB_TOKEN") or config.get("github", {}).get("token") or config.get("github_token")
         self.base_url = "https://api.github.com"
         
         # Set up headers for API requests
@@ -31,8 +32,58 @@ class GitHubAgent:
         if self.github_token:
             self.headers["Authorization"] = f"token {self.github_token}"
             self.logger.info("GitHub token configured")
+            
+            # Try to get authenticated user info for smart defaults
+            self.authenticated_user = self._get_authenticated_user()
+            self.user_repos = None  # Lazy load when needed
         else:
             self.logger.warning("GitHub token not configured - limited functionality available")
+            self.authenticated_user = None
+            self.user_repos = None
+    
+    def _get_authenticated_user(self) -> Optional[Dict[str, Any]]:
+        """Get information about the authenticated GitHub user"""
+        try:
+            response = requests.get(
+                f"{self.base_url}/user",
+                headers=self.headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            user_data = response.json()
+            
+            self.logger.info(f"Authenticated as GitHub user: {user_data.get('login')}")
+            return user_data
+            
+        except Exception as e:
+            self.logger.warning(f"Could not fetch authenticated user info: {e}")
+            return None
+    
+    def _get_user_recent_repo(self) -> Optional[str]:
+        """Get the most recently updated repository for the authenticated user"""
+        if not self.authenticated_user:
+            return None
+        
+        try:
+            username = self.authenticated_user.get("login")
+            response = requests.get(
+                f"{self.base_url}/users/{username}/repos",
+                headers=self.headers,
+                params={"sort": "updated", "per_page": 1},
+                timeout=10
+            )
+            response.raise_for_status()
+            repos = response.json()
+            
+            if repos and len(repos) > 0:
+                repo_full_name = repos[0].get("full_name")
+                self.logger.info(f"Using most recent repository: {repo_full_name}")
+                return repo_full_name
+            
+        except Exception as e:
+            self.logger.warning(f"Could not fetch user repositories: {e}")
+        
+        return None
     
     @retry_on_failure(max_retries=3)
     def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
@@ -75,9 +126,59 @@ class GitHubAgent:
     def get_repository_commits(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Get commits from a repository"""
         try:
-            repo = parameters.get("repository")
-            if not repo:
-                raise ValueError("Repository parameter is required")
+            repo = parameters.get("repository", "")
+            
+            # Smart repository detection
+            if not repo or repo == "user/repo" or repo == "":
+                # Try to get from authenticated user's recent repos
+                repo = self._get_user_recent_repo()
+                
+                if not repo:
+                    # Try environment variables first
+                    env_owner = os.getenv("GITHUB_DEFAULT_OWNER")
+                    env_repo = os.getenv("GITHUB_DEFAULT_REPO")
+                    
+                    if env_owner and env_repo and env_owner != "your-username":
+                        repo = f"{env_owner}/{env_repo}"
+                    else:
+                        # Try config defaults as fallback
+                        github_config = self.config.get("github", {})
+                        default_owner = github_config.get("default_owner")
+                        default_repo = github_config.get("default_repo")
+                        
+                        if default_owner and default_repo and default_owner != "your-username":
+                            repo = f"{default_owner}/{default_repo}"
+                
+                if not repo:
+                    raise ValueError(
+                        "Repository parameter is required. Please either:\n"
+                        "1. Set GITHUB_DEFAULT_OWNER and GITHUB_DEFAULT_REPO in .env\n"
+                        "2. Configure github.default_owner and github.default_repo in config.yaml\n"
+                        "3. Specify repository name in your prompt (e.g., 'Hemesh11/Autotasker-AI')"
+                    )
+            
+            # Handle wildcard pattern (username/*) - get most recent repo for that user
+            if "/*" in repo:
+                username = repo.split("/")[0]
+                try:
+                    response = requests.get(
+                        f"{self.base_url}/users/{username}/repos",
+                        headers=self.headers,
+                        params={"sort": "updated", "per_page": 1},
+                        timeout=10
+                    )
+                    response.raise_for_status()
+                    repos = response.json()
+                    
+                    if repos and len(repos) > 0:
+                        repo = repos[0].get("full_name")
+                        self.logger.info(f"Auto-detected repository for {username}: {repo}")
+                    else:
+                        raise ValueError(f"No repositories found for user {username}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Failed to auto-detect repository: {e}")
+                    raise ValueError(f"Could not find repositories for user {username}")
             
             # Parse repository (owner/repo format)
             if "/" not in repo:
@@ -287,21 +388,39 @@ class GitHubAgent:
             
             # Format repository data
             formatted_repos = []
-            for repo in repos:
-                formatted_repos.append({
+            repo_list_lines = []
+            
+            for i, repo in enumerate(repos, 1):
+                formatted_repo = {
                     "name": repo["name"],
                     "full_name": repo["full_name"],
-                    "description": repo.get("description", "No description"),
-                    "language": repo.get("language"),
+                    "description": repo.get("description") or "No description",
+                    "language": repo.get("language") or "Not specified",
                     "stars": repo["stargazers_count"],
                     "forks": repo["forks_count"],
                     "updated_at": repo["updated_at"],
                     "url": repo["html_url"]
-                })
+                }
+                formatted_repos.append(formatted_repo)
+                
+                # Create readable line for content
+                repo_list_lines.append(
+                    f"{i}. {repo['name']}\n"
+                    f"   Language: {formatted_repo['language']}, "
+                    f"Stars: {formatted_repo['stars']}, Forks: {formatted_repo['forks']}\n"
+                    f"   URL: {formatted_repo['url']}"
+                )
+            
+            # Create detailed content string
+            content_parts = [
+                f"Retrieved {len(formatted_repos)} repositories for {username}:",
+                "",
+                "\n\n".join(repo_list_lines)
+            ]
             
             return {
                 "success": True,
-                "content": f"Retrieved {len(formatted_repos)} repositories for {username}",
+                "content": "\n".join(content_parts),
                 "data": {
                     "username": username,
                     "repositories": formatted_repos,

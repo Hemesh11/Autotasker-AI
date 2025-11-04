@@ -3,6 +3,7 @@ Gmail Agent: Handles all Gmail API operations
 """
 
 import os
+import json
 import base64
 import logging
 from typing import Dict, List, Any, Optional
@@ -18,6 +19,13 @@ from googleapiclient.errors import HttpError
 
 from backend.utils import retry_on_failure, clean_html
 
+# Try to import boto3 for AWS Secrets Manager (optional for local dev)
+try:
+    import boto3
+    AWS_AVAILABLE = True
+except ImportError:
+    AWS_AVAILABLE = False
+
 
 class GmailAgent:
     """Agent for Gmail operations - fetching, filtering, and sending emails"""
@@ -31,42 +39,129 @@ class GmailAgent:
         self.config = config
         self.logger = logging.getLogger(f"{__name__}.GmailAgent")
         
-        self.credentials_path = config.get("google", {}).get("credentials_path", "google_auth/credentials.json")
-        self.token_path = config.get("google", {}).get("gmail_token_path", "google_auth/gmail_token.json")
+        # Check if running in AWS Lambda environment
+        self.is_aws = os.getenv('AWS_EXECUTION_ENV') is not None
+        
+        if self.is_aws and AWS_AVAILABLE:
+            # Running in AWS Lambda - use Secrets Manager
+            self.logger.info("Running in AWS environment, using Secrets Manager")
+            self.credentials_path = None  # Will load from Secrets Manager
+            self.token_path = None
+        else:
+            # Running locally - use file paths
+            self.logger.info("Running locally, using file-based credentials")
+            self.credentials_path = config.get("google", {}).get("credentials_path", "google_auth/credentials.json")
+            self.token_path = config.get("google", {}).get("gmail_token_path", "google_auth/gmail_token.json")
         
         self.service = None
         self._authenticate()
+    
+    def _get_credentials_from_secrets_manager(self) -> Dict[str, Any]:
+        """Retrieve Gmail credentials from AWS Secrets Manager"""
+        
+        if not AWS_AVAILABLE:
+            raise ImportError("boto3 not available. Install it for AWS Secrets Manager support.")
+        
+        secret_name = self.config.get("gmail", {}).get("credentials_secret", "autotasker/gmail-credentials")
+        region_name = self.config.get("aws", {}).get("region", "eu-north-1")
+        
+        self.logger.info(f"Retrieving Gmail credentials from Secrets Manager: {secret_name}")
+        
+        # Create a Secrets Manager client
+        session = boto3.session.Session()
+        client = session.client(
+            service_name='secretsmanager',
+            region_name=region_name
+        )
+        
+        try:
+            get_secret_value_response = client.get_secret_value(
+                SecretId=secret_name
+            )
+            
+            # Parse the secret
+            secret = json.loads(get_secret_value_response['SecretString'])
+            self.logger.info("Successfully retrieved Gmail credentials from Secrets Manager")
+            return secret
+            
+        except Exception as e:
+            self.logger.error(f"Failed to retrieve Gmail credentials from Secrets Manager: {e}")
+            raise
     
     def _authenticate(self) -> None:
         """Authenticate with Google Gmail API"""
         creds = None
         
-        # Load existing token
-        if os.path.exists(self.token_path):
-            creds = Credentials.from_authorized_user_file(self.token_path, self.SCOPES)
-        
-        # If no valid credentials, go through OAuth flow
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                try:
-                    creds.refresh(Request())
-                except Exception as e:
-                    self.logger.error(f"Failed to refresh credentials: {e}")
-                    creds = None
-            
-            if not creds:
-                if not os.path.exists(self.credentials_path):
-                    raise FileNotFoundError(f"Gmail credentials file not found: {self.credentials_path}")
+        if self.is_aws and AWS_AVAILABLE:
+            # AWS Lambda environment - use Secrets Manager
+            try:
+                credentials_dict = self._get_credentials_from_secrets_manager()
                 
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_path, self.SCOPES
-                )
-                creds = flow.run_local_server(port=0)
+                # Create OAuth flow from credentials
+                from google_auth_oauthlib.flow import Flow
+                
+                # For Lambda, we need to use a different auth flow
+                # This assumes you've already authorized and have refresh tokens stored
+                # For initial setup, you'll need to do OAuth locally first
+                
+                # Try to get stored tokens from Secrets Manager
+                try:
+                    token_secret_name = self.config.get("gmail", {}).get("token_secret", "autotasker/gmail-token")
+                    region_name = self.config.get("aws", {}).get("region", "eu-north-1")
+                    
+                    session = boto3.session.Session()
+                    client = session.client(service_name='secretsmanager', region_name=region_name)
+                    
+                    token_response = client.get_secret_value(SecretId=token_secret_name)
+                    token_dict = json.loads(token_response['SecretString'])
+                    
+                    creds = Credentials.from_authorized_user_info(token_dict, self.SCOPES)
+                    self.logger.info("Loaded Gmail token from Secrets Manager")
+                    
+                except Exception as token_error:
+                    self.logger.warning(f"Could not load token from Secrets Manager: {token_error}")
+                    self.logger.warning("Gmail authentication will fail in Lambda without pre-authorized tokens")
+                    raise Exception("Gmail requires pre-authorized tokens in Lambda environment. Run OAuth flow locally first.")
+                
+            except Exception as e:
+                self.logger.error(f"AWS authentication failed: {e}")
+                raise
+        else:
+            # Local environment - use file-based credentials
+            # Load existing token
+            if os.path.exists(self.token_path):
+                creds = Credentials.from_authorized_user_file(self.token_path, self.SCOPES)
             
-            # Save credentials for future use
-            os.makedirs(os.path.dirname(self.token_path), exist_ok=True)
-            with open(self.token_path, 'w') as token:
-                token.write(creds.to_json())
+            # If no valid credentials, go through OAuth flow
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    try:
+                        creds.refresh(Request())
+                    except Exception as e:
+                        self.logger.error(f"Failed to refresh credentials: {e}")
+                        creds = None
+                
+                if not creds:
+                    if not os.path.exists(self.credentials_path):
+                        raise FileNotFoundError(f"Gmail credentials file not found: {self.credentials_path}")
+                    
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        self.credentials_path, self.SCOPES
+                    )
+                    creds = flow.run_local_server(port=0)
+                
+                # Save credentials for future use
+                os.makedirs(os.path.dirname(self.token_path), exist_ok=True)
+                with open(self.token_path, 'w') as token:
+                    token.write(creds.to_json())
+        
+        # Refresh token if expired
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+                self.logger.info("Refreshed expired Gmail credentials")
+            except Exception as e:
+                self.logger.error(f"Failed to refresh credentials: {e}")
         
         # Build the Gmail service
         self.service = build('gmail', 'v1', credentials=creds)

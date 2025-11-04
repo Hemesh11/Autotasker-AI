@@ -101,8 +101,11 @@ agents:
 # Scheduling
 scheduler:
   default_time: "09:00"
-  timezone: "UTC"
+  timezone: "Asia/Kolkata"  # User timezone (IST)
   max_daily_tasks: 10
+
+# User preferences
+timezone: "Asia/Kolkata"  # Default timezone for calendar events and scheduling
   
 # Memory Settings
 memory:

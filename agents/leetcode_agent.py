@@ -605,6 +605,35 @@ class LeetCodeAgent:
         
         self.logger.info(f"Initialized data sources: {', '.join(sources)}")
     
+    def _is_similar_title(self, title: str, existing_titles: set) -> bool:
+        """Check if title is similar to existing titles to prevent near-duplicates"""
+        import difflib
+        
+        title_lower = title.lower().strip()
+        title_words = set(title_lower.split())
+        
+        for existing in existing_titles:
+            existing_lower = existing.lower().strip()
+            
+            # Check exact match
+            if title_lower == existing_lower:
+                return True
+            
+            # Check similarity ratio (85% similar = duplicate)
+            similarity = difflib.SequenceMatcher(None, title_lower, existing_lower).ratio()
+            if similarity > 0.85:
+                return True
+            
+            # Check word overlap (70% of words in common = similar)
+            existing_words = set(existing_lower.split())
+            if len(title_words) > 0 and len(existing_words) > 0:
+                overlap = len(title_words.intersection(existing_words))
+                max_words = max(len(title_words), len(existing_words))
+                if overlap / max_words > 0.7:
+                    return True
+        
+        return False
+
     def _get_problems_from_sources(self, topic: str, difficulty: str, count: int) -> List[Dict[str, Any]]:
         """Get problems using hybrid approach: GraphQL → LLM → Curated DB"""
         problems = []
@@ -617,10 +646,25 @@ class LeetCodeAgent:
                 for attempt in range(2):
                     graphql_problems = self.graphql_client.get_problems_by_topic(topic, difficulty, count + 2)
                     if graphql_problems:
-                        # Filter out any problems we already have
-                        existing_titles = {p.get('title', '') for p in problems}
-                        new_problems = [p for p in graphql_problems if p.get('title', '') not in existing_titles]
-                        problems.extend(new_problems[:count - len(problems)])
+                        # Enhanced duplicate filtering with fuzzy matching
+                        for new_problem in graphql_problems:
+                            new_title = new_problem.get('title', '')
+                            if not new_title:
+                                continue
+                                
+                            # Check for exact and fuzzy duplicates
+                            is_duplicate = False
+                            for existing_problem in problems:
+                                existing_title = existing_problem.get('title', '')
+                                if (existing_title == new_title or 
+                                    self._is_similar_title(existing_title, new_title)):
+                                    is_duplicate = True
+                                    break
+                                    
+                            if not is_duplicate:
+                                problems.append(new_problem)
+                                if len(problems) >= count:
+                                    break
                         
                         if len(problems) >= count:
                             break
@@ -639,13 +683,26 @@ class LeetCodeAgent:
                 self.logger.info(f"Attempting LLM generation for {topic}/{difficulty}")
                 attempts_needed = count - len(problems)
                 
-                for i in range(attempts_needed):
+                for i in range(attempts_needed * 3):  # More attempts to ensure uniqueness
                     problem = self._generate_leetcode_question_llm(topic, difficulty, i + 1)
                     if problem:
-                        # Check for duplicates within this batch
-                        existing_titles = {p.get('title', '') for p in problems}
-                        if problem.get('title', '') not in existing_titles:
+                        problem_title = problem.get('title', '')
+                        if not problem_title:
+                            continue
+                        
+                        # Enhanced duplicate checking with fuzzy matching
+                        is_duplicate = False
+                        for existing_problem in problems:
+                            existing_title = existing_problem.get('title', '')
+                            if (existing_title == problem_title or 
+                                self._is_similar_title(existing_title, problem_title)):
+                                is_duplicate = True
+                                break
+                                
+                        if not is_duplicate:
                             problems.append(problem)
+                            if len(problems) >= count:
+                                break
                 
                 if problems:
                     self.logger.info(f"✅ Generated {len(problems)} problems using LLM")
@@ -659,14 +716,30 @@ class LeetCodeAgent:
             try:
                 self.logger.info(f"Using curated database as fallback for {topic}/{difficulty}")
                 attempts_needed = count - len(problems)
-                curated_problems = self.curated_db.get_problems(topic, difficulty, attempts_needed)
+                curated_problems = self.curated_db.get_problems(topic, difficulty, attempts_needed * 2)  # Get more to filter
                 
                 if curated_problems:
-                    # Filter out duplicates
-                    existing_titles = {p.get('title', '') for p in problems}
-                    new_curated = [p for p in curated_problems if p.get('title', '') not in existing_titles]
-                    problems.extend(new_curated[:attempts_needed])
-                    self.logger.info(f"✅ Got {len(new_curated)} new problems from curated database")
+                    # Enhanced duplicate filtering
+                    for curated_problem in curated_problems:
+                        curated_title = curated_problem.get('title', '')
+                        if not curated_title:
+                            continue
+                            
+                        is_duplicate = False
+                        for existing_problem in problems:
+                            existing_title = existing_problem.get('title', '')
+                            if (existing_title == curated_title or 
+                                self._is_similar_title(existing_title, curated_title)):
+                                is_duplicate = True
+                                break
+                                
+                        if not is_duplicate:
+                            problems.append(curated_problem)
+                            if len(problems) >= count:
+                                break
+                                
+                    added_count = len(problems) - (count - attempts_needed)
+                    self.logger.info(f"✅ Got {added_count} new unique problems from curated database")
             except Exception as e:
                 self.logger.error(f"Curated database failed: {e}")
         
@@ -1342,12 +1415,28 @@ class LeetCodeAgent:
         return questions
     
     def _generate_leetcode_question_llm(self, topic: str, difficulty: str, question_num: int) -> Optional[Dict[str, Any]]:
-        """Generate a single LeetCode question using LLM"""
+        """Generate a single LeetCode question using LLM with diversity"""
+        
+        # Add randomization to ensure diverse questions
+        import random
+        
+        diversity_prompts = [
+            f"Generate a unique {difficulty} {topic} problem (variation #{question_num})",
+            f"Create a different {difficulty} {topic} coding challenge",
+            f"Design a new {difficulty} {topic} algorithm problem",
+            f"Generate a fresh {difficulty} {topic} programming question"
+        ]
+        
+        base_prompt = random.choice(diversity_prompts)
         
         prompt = f"""
-        Generate a real LeetCode problem for:
+        {base_prompt}
+        
         Topic: {topic}
         Difficulty: {difficulty}
+        
+        IMPORTANT: Generate a UNIQUE question that is different from common problems like "Two Sum", "Move Zeroes", etc.
+        Focus on creating original problems or lesser-known LeetCode questions.
         
         Provide response in this exact format:
         TITLE: [Problem title]
